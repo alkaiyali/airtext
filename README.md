@@ -17,15 +17,16 @@ A small clipboard bridge between a computer and a phone. Open the app on the com
 
 - Room codes are temporary bearer capabilities. Leave the room or start over to invalidate the current connection.
 - Invite links carry the room code in the query string; codes are short-lived bearer tokens that expire with the room.
-- Only two browser connections are allowed in a room.
-- Clipboard text is forwarded to the other live browser and is not persisted by the Worker.
-- Text is rendered as text, never as HTML.
-- Text entries are capped at 100,000 characters and each local history is capped at 100 entries.
+- Only two browser connections are allowed in a room (max 4 sockets briefly during reconnect overlap; unidentified sockets are closed after 10s).
+- Clipboard text is sealed on-device with AES-GCM under ephemeral ECDH (P-256) session keys before relay, forwarded to the other live browser, and never persisted by the Worker. The room code is only the rendezvous name — it cannot decrypt anything, and keys are discarded when you leave (forward secrecy). The relay still sees metadata (timing, size, IPs): treat rooms as private, not anonymous.
+- Each screen shows a **match check** code once the secure channel is up. If both screens show the same code, no one is sitting in the middle; if they differ, leave the room and start over.
+- Text entries are capped at 100,000 characters, images are auto-compressed under 350 KB, and each local history is capped at 100 entries per room.
+- Room creation is rate-limited per network (60/hour); clipboard relay is rate-limited to 1 message/second per device.
 - Camera and clipboard permissions are controlled by the browser. HTTPS is required by modern browsers for those APIs.
 
 ## Architecture
 
-Cloudflare Workers Static Assets for the Vite build, one Durable Object instance per temporary room for WebSocket signaling/relay. Room relay keeps content in memory only, does not write clipboard text to Durable Object storage, and closes idle rooms.
+Cloudflare Workers Static Assets for the Vite build, one Durable Object instance per temporary room for WebSocket signaling/relay. Room relay keeps content in memory only, does not write clipboard text to Durable Object storage, and reaps idle rooms via storage alarms (survives eviction).
 
 ## Local development
 

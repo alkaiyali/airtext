@@ -1,9 +1,5 @@
-import jsQR from 'jsqr'
-
-// Camera-backed QR scanning built on jsQR. html5-qrcode's vendored zxing
-// silently fails to decode some perfectly valid symbols (payload/mask
-// dependent), which made pairing impossible for roughly half of all room
-// codes; jsQR reads every symbol we could throw at it.
+// Camera-backed QR scanning. jsQR is lazy-loaded so the desktop bundle never
+// downloads it; the scanner panel is the only importer.
 
 export interface QrScanHandle {
   stop: () => void
@@ -24,20 +20,40 @@ export function startQrScanning({ video, onDecode, onError }: StartOptions): QrS
   let stream: MediaStream | null = null
   let timer: number | undefined
   let finished = false
+  let decode: ((data: Uint8ClampedArray, width: number, height: number) => { data: string } | null) | null = null
 
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
-  function finish(): void {
-    if (finished) return
-    finished = true
+  function cleanup(): void {
     if (timer !== undefined) window.clearInterval(timer)
     timer = undefined
     stream?.getTracks().forEach((track) => track.stop())
     stream = null
+    if (video.srcObject) video.srcObject = null
   }
 
-  navigator.mediaDevices?.getUserMedia({ video: { facingMode: 'environment' } })
+  function finish(): void {
+    if (finished) return
+    finished = true
+    cleanup()
+  }
+
+  // Load the decoder in the background while the camera warms up.
+  import('jsqr').then((module) => {
+    if (cancelled || finished) return
+    const jsQR = module.default
+    decode = (data, width, height) => jsQR(data, width, height, { inversionAttempts: 'attemptBoth' })
+  }).catch(() => {
+    if (!cancelled && !finished) onError('The QR decoder could not load. Enter the room code instead.')
+  })
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    onError('Camera access is unavailable. Enter the room code instead.')
+    return { stop: () => { cancelled = true; finish() } }
+  }
+
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
     .then((mediaStream) => {
       if (cancelled) {
         mediaStream.getTracks().forEach((track) => track.stop())
@@ -46,20 +62,19 @@ export function startQrScanning({ video, onDecode, onError }: StartOptions): QrS
       stream = mediaStream
       video.srcObject = mediaStream
       video.setAttribute('playsinline', 'true')
-      void video.play().catch(() => onError('The camera preview could not start. Enter the room code instead.'))
+      void video.play().catch(() => {
+        if (!cancelled) onError('The camera preview could not start. Enter the room code instead.')
+      })
       timer = window.setInterval(() => {
-        if (finished || video.readyState < video.HAVE_ENOUGH_DATA || !ctx || !video.videoWidth) return
+        if (finished || !decode || video.readyState < video.HAVE_ENOUGH_DATA || !ctx || !video.videoWidth) return
         canvas.width = video.videoWidth
         canvas.height = video.videoHeight
         ctx.drawImage(video, 0, 0)
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const found = jsQR(image.data, image.width, image.height, { inversionAttempts: 'dontInvert' })
+        const found = decode(image.data, image.width, image.height)
         if (found?.data && !finished) {
           finished = true
-          window.clearInterval(timer)
-          timer = undefined
-          stream?.getTracks().forEach((track) => track.stop())
-          stream = null
+          cleanup()
           onDecode(found.data)
         }
       }, SCAN_INTERVAL_MS)

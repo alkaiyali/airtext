@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import QRCode from 'qrcode'
 import type { RoomStatus } from '../types'
 import { roomInviteUrl } from '../types'
 import { ConnectionStatus } from './ConnectionStatus'
@@ -13,7 +12,9 @@ interface HostPairingProps {
 
 export function HostPairing({ code, status, onConnect, onReset }: HostPairingProps) {
   const [qrData, setQrData] = useState('')
+  const [qrError, setQrError] = useState('')
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const onConnectRef = useRef(onConnect)
 
   useEffect(() => {
@@ -21,17 +22,30 @@ export function HostPairing({ code, status, onConnect, onReset }: HostPairingPro
   }, [onConnect])
 
   useEffect(() => {
-    // scale + integer margin (not a fixed width): fractional module sizes and
-    // the spec-minimum quiet zone make symbols unreliable for scanners.
-    QRCode.toDataURL(roomInviteUrl(code), { scale: 8, margin: 4, color: { dark: '#1e2927', light: '#fffdf8' } }).then((data) => {
-      setQrData(data)
+    let cancelled = false
+    // Lazy-load the QR encoder so the phone bundle never downloads it.
+    import('qrcode').then(({ default: QRCode }) => {
+      if (cancelled) return
+      // scale + integer margin (not a fixed width): fractional module sizes and
+      // the spec-minimum quiet zone make symbols unreliable for scanners.
+      return QRCode.toDataURL(roomInviteUrl(code), { scale: 8, margin: 4, color: { dark: '#1e2927', light: '#fffdf8' } })
+    }).then((data) => {
+      if (!cancelled && data) setQrData(data)
+    }).catch(() => {
+      if (!cancelled) setQrError('Could not draw the QR code. Use the 8-character code below.')
     })
+    return () => { cancelled = true }
   }, [code])
 
   async function copyCode(): Promise<void> {
-    await navigator.clipboard?.writeText(code)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1800)
+    try {
+      await navigator.clipboard?.writeText(code)
+      setCopied(true)
+      setCopyFailed(false)
+      window.setTimeout(() => setCopied(false), 1800)
+    } catch {
+      setCopyFailed(true)
+    }
   }
 
   function startPairing(): void {
@@ -52,11 +66,12 @@ export function HostPairing({ code, status, onConnect, onReset }: HostPairingPro
       </div>
       <div className="qr-panel">
         <div className="qr-frame">
-          {qrData ? <img src={qrData} alt={`QR code to join room ${code}`} /> : <div className="qr-loading">Preparing room…</div>}
+          {qrData ? <img src={qrData} alt={`QR code to join room ${code}`} /> : qrError ? <div className="qr-loading" role="alert">{qrError}</div> : <div className="qr-loading">Preparing room…</div>}
         </div>
         <div className="code-block">
           <span className="label">Or enter this 8-character code</span>
           <div className="code-row"><strong>{code.slice(0, 4)} {code.slice(4)}</strong><button className="icon-button" type="button" onClick={copyCode} aria-label="Copy room code">{copied ? '✓' : '⧉'}</button></div>
+          {copyFailed ? <p className="micro-copy" role="alert">Copy was blocked — long-press the code to copy it manually.</p> : null}
         </div>
         <button className="primary-button full-width" type="button" onClick={startPairing}>{status === 'connected' ? 'Open clipboard' : 'Start room'}</button>
         <p className="micro-copy">The room closes automatically after 30 minutes of inactivity.</p>

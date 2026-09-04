@@ -1,4 +1,6 @@
-const MAX_PER_IP_PER_HOUR = 1000
+// Room creation is rare (one per pairing): 60 joins/hour/IP is generous for
+// normal use while bounding room-spam and code-enumeration from one network.
+const MAX_PER_IP_PER_HOUR = 60
 const WINDOW_MS = 60 * 60 * 1000
 const KEY_PREFIX = 'ip:'
 

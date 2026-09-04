@@ -80,7 +80,7 @@ export function JoinScanner({ status, initialCode = '', errorMessage, onConnect,
         <p className="lede">Your phone is the quick side of the connection. Nothing is saved to an account.</p>
       </div>
       <div className="scanner-panel">
-        <div className="scanner-window"><video ref={videoRef} className="scanner-video" aria-label="QR code scanner" muted autoPlay playsInline /><div className="scanner-corner scanner-corner--tl" /><div className="scanner-corner scanner-corner--tr" /><div className="scanner-corner scanner-corner--bl" /><div className="scanner-corner scanner-corner--br" /></div>
+        <div className="scanner-window"><video ref={videoRef} className="scanner-video" aria-label="QR code scanner" muted autoPlay playsInline /><div className="scanner-corner scanner-corner--tl" aria-hidden="true" /><div className="scanner-corner scanner-corner--tr" aria-hidden="true" /><div className="scanner-corner scanner-corner--bl" aria-hidden="true" /><div className="scanner-corner scanner-corner--br" aria-hidden="true" /></div>
         <div className="scanner-message"><span className="pulse-dot" aria-hidden="true" /> Looking for a room code</div>
         {(cameraError || errorMessage) ? <p className="error-message" role="alert">{errorMessage || cameraError}</p> : null}
         <button className="text-button center-button" type="button" onClick={() => setShowManual((value) => !value)}>{showManual ? 'Use camera instead' : 'Enter a code instead'}</button>

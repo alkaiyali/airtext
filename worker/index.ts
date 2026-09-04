@@ -16,6 +16,15 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Permissions-Policy': 'camera=(self), clipboard-read=(self), clipboard-write=(self)',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
+  // HSTS is ignored over plain HTTP (local dev), honored over HTTPS (prod).
+  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
+  // Vite emits same-origin module scripts + external CSS; images may be
+  // data:/blob: (camera/gallery), sockets are same-origin wss:.
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob:; media-src blob: data:; connect-src 'self' wss: ws:; " +
+    "worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; " +
+    "form-action 'self'; frame-ancestors 'none'",
 }
 
 function withSecurityHeaders(response: Response): Response {
@@ -60,7 +69,7 @@ export default {
       return await handleFetch(request, env)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      return new Response(`airtext error: ${message}`, { status: 500 })
+      return withSecurityHeaders(new Response(`airtext error: ${message}`, { status: 500 }))
     }
   },
 }
@@ -79,7 +88,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     const roomId = env.ROOMS.idFromName(roomMatch[1].toUpperCase())
     try {
       const stub = env.ROOMS.get(roomId)
-      if (!stub) return new Response('room error: ROOMS.get returned undefined', { status: 500 })
+      if (!stub) return withSecurityHeaders(new Response('room error: ROOMS.get returned undefined', { status: 500 }))
       const upgrade = await stub.fetch(request)
       // Count a successful join without blocking the upgrade (fire-and-forget).
       if (upgrade.status === 101) {
@@ -88,7 +97,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
       return upgrade
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      return new Response(`room error: ${message}`, { status: 500 })
+      return withSecurityHeaders(new Response(`room error: ${message}`, { status: 500 }))
     }
   }
 

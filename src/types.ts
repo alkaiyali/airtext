@@ -16,6 +16,7 @@ export type RoomStatus = 'idle' | 'connecting' | 'waiting' | 'connected' | 'disc
 export type ClientMessage =
   | { type: 'hello'; version: 1; device: DeviceKind }
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number }
+  | { type: 'key-exchange'; id: string; publicKey: string; confirm?: string; createdAt: number }
   | { type: 'ack'; id: string }
   | { type: 'clear-history' }
   | { type: 'ping'; timestamp: number }
@@ -25,6 +26,7 @@ export type ServerMessage =
   | { type: 'peer-joined'; peers: number }
   | { type: 'peer-left'; peers: number }
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number; source: DeviceKind }
+  | { type: 'key-exchange'; id: string; publicKey: string; confirm?: string; createdAt: number; source: DeviceKind }
   | { type: 'ack'; id: string }
   | { type: 'clear-history' }
   | { type: 'pong'; timestamp: number }
@@ -46,6 +48,15 @@ export function isServerMessage(value: unknown): value is ServerMessage {
   if (message.type === 'clipboard-item') {
     return typeof message.id === 'string' && typeof message.sealed === 'string' && typeof message.createdAt === 'number' && (message.source === 'desktop' || message.source === 'phone')
   }
+  if (message.type === 'key-exchange') {
+    return (
+      typeof message.id === 'string' &&
+      typeof message.publicKey === 'string' &&
+      (message.confirm === undefined || typeof message.confirm === 'string') &&
+      typeof message.createdAt === 'number' &&
+      (message.source === 'desktop' || message.source === 'phone')
+    )
+  }
   if (message.type === 'pong') return typeof message.timestamp === 'number'
   if (message.type === 'error') return typeof message.code === 'string' && typeof message.message === 'string'
   return false
@@ -57,6 +68,14 @@ export function isClientMessage(value: unknown): value is ClientMessage {
   if (message.type === 'hello') return message.version === 1 && (message.device === 'desktop' || message.device === 'phone')
   if (message.type === 'clipboard-item') {
     return typeof message.id === 'string' && typeof message.sealed === 'string' && typeof message.createdAt === 'number'
+  }
+  if (message.type === 'key-exchange') {
+    return (
+      typeof message.id === 'string' &&
+      typeof message.publicKey === 'string' &&
+      (message.confirm === undefined || typeof message.confirm === 'string') &&
+      typeof message.createdAt === 'number'
+    )
   }
   if (message.type === 'ack') return typeof message.id === 'string'
   if (message.type === 'clear-history') return true
@@ -81,6 +100,9 @@ export const MAX_TEXT_LENGTH = 100_000
 export const MAX_IMAGE_BYTES = 350_000
 // Mirrors worker/protocol.ts: sealed payloads above this never fit a frame.
 export const MAX_SEALED_LENGTH = 900_000
+// Mirror worker/protocol.ts key-exchange bounds (asserted in types.test.ts).
+export const MAX_PUBKEY_LENGTH = 256
+export const MAX_CONFIRM_LENGTH = 128
 
 export function createRoomCode(): string {
   let code = ''

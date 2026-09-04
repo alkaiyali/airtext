@@ -2,7 +2,8 @@ import type { ClipboardEntry } from '../types'
 
 const DB_NAME = 'airtext'
 const STORE_NAME = 'history'
-const MAX_ENTRIES = 100
+const MAX_ENTRIES_PER_ROOM = 100
+const MAX_ENTRIES_TOTAL = 200
 const FALLBACK_KEY = 'airtext-history'
 
 function normalize(entries: ClipboardEntry[]): ClipboardEntry[] {
@@ -11,31 +12,35 @@ function normalize(entries: ClipboardEntry[]): ClipboardEntry[] {
     .filter((entry) => (entry.kind === 'image' ? Boolean(entry.image) : entry.text.trim().length > 0))
     .sort((a, b) => b.createdAt - a.createdAt)
     .filter((entry) => {
-      const key = entry.kind === 'image' ? `img:${entry.image}` : `txt:${entry.text}`
-      if (seen.has(key)) return false
-      seen.add(key)
+      // Dedupe by stable id: the same text shared twice is two entries with
+      // distinct ids and timestamps, and collapsing them loses history.
+      if (seen.has(entry.id)) return false
+      seen.add(entry.id)
       return true
     })
-    .slice(0, MAX_ENTRIES)
+    .slice(0, MAX_ENTRIES_PER_ROOM)
 }
 
-// Only entries belonging to the active room are visible; leftovers from older
-// sessions stay hidden until the next write prunes them from storage.
+// Only entries belonging to the active room are visible; entries from other
+// rooms stay stored but hidden until that room is rejoined.
 export function visibleEntries(entries: ClipboardEntry[], roomId: string): ClipboardEntry[] {
+  if (!roomId) return []
   return normalize(entries.filter((entry) => entry.roomId === roomId))
 }
 
 function fallbackRead(): ClipboardEntry[] {
   try {
     const value = localStorage.getItem(FALLBACK_KEY)
-    return value ? normalize(JSON.parse(value) as ClipboardEntry[]) : []
+    return value ? (JSON.parse(value) as ClipboardEntry[]) : []
   } catch {
     return []
   }
 }
 
 function fallbackWrite(entries: ClipboardEntry[]): void {
-  localStorage.setItem(FALLBACK_KEY, JSON.stringify(normalize(entries)))
+  try {
+    localStorage.setItem(FALLBACK_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES_TOTAL)))
+  } catch { /* quota exceeded: keep in-memory state */ }
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -61,19 +66,11 @@ async function readAll(): Promise<ClipboardEntry[]> {
   }
 }
 
-export async function loadHistory(roomId: string): Promise<ClipboardEntry[]> {
-  return visibleEntries(await readAll(), roomId)
-}
-
-export async function saveEntry(entry: ClipboardEntry, roomId: string): Promise<ClipboardEntry[]> {
-  // Stamp the room and keep only this room's entries: a new session must not
-  // inherit items from an older one.
-  const stamped: ClipboardEntry = { ...entry, roomId }
-  const entries = visibleEntries(await readAll(), roomId)
-  const merged = normalize([stamped, ...entries])
+async function writeAll(entries: Promise<ClipboardEntry[]> | ClipboardEntry[]): Promise<void> {
+  const merged = (await entries).slice(0, MAX_ENTRIES_TOTAL)
   if (!('indexedDB' in window)) {
     fallbackWrite(merged)
-    return merged
+    return
   }
   try {
     const db = await openDatabase()
@@ -88,25 +85,53 @@ export async function saveEntry(entry: ClipboardEntry, roomId: string): Promise<
   } catch {
     fallbackWrite(merged)
   }
-  return merged
 }
 
-export async function clearHistory(): Promise<ClipboardEntry[]> {
-  if (!('indexedDB' in window)) {
-    localStorage.removeItem(FALLBACK_KEY)
+export async function loadHistory(roomId: string): Promise<ClipboardEntry[]> {
+  return visibleEntries(await readAll(), roomId)
+}
+
+export async function saveEntry(entry: ClipboardEntry, roomId: string): Promise<ClipboardEntry[]> {
+  // Stamp the room and preserve other rooms: a new session must not inherit
+  // old items visibly, but rejoining an older room still finds its trail
+  // until global pruning drops it.
+  const stamped: ClipboardEntry = { ...entry, roomId }
+  const all = await readAll()
+  const others = all.filter((item) => item.roomId !== roomId)
+  const mine = normalize([stamped, ...all.filter((item) => item.roomId === roomId)])
+  await writeAll([...mine, ...others])
+  return mine
+}
+
+export async function deleteEntry(id: string, roomId: string): Promise<ClipboardEntry[]> {
+  const all = await readAll()
+  await writeAll(all.filter((item) => !(item.id === id && item.roomId === roomId)))
+  return visibleEntries(all.filter((item) => !(item.id === id && item.roomId === roomId)), roomId)
+}
+
+/** Clears only the given room when provided; clears everything for legacy callers. */
+export async function clearHistory(roomId?: string): Promise<ClipboardEntry[]> {
+  if (!roomId) {
+    if (!('indexedDB' in window)) {
+      localStorage.removeItem(FALLBACK_KEY)
+      return []
+    }
+    try {
+      const db = await openDatabase()
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, 'readwrite')
+        transaction.objectStore(STORE_NAME).clear()
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error)
+      })
+    } catch {
+      localStorage.removeItem(FALLBACK_KEY)
+    }
     return []
   }
-  try {
-    const db = await openDatabase()
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite')
-      transaction.objectStore(STORE_NAME).clear()
-      transaction.oncomplete = () => resolve()
-      transaction.onerror = () => reject(transaction.error)
-    })
-  } catch {
-    localStorage.removeItem(FALLBACK_KEY)
-  }
+  const all = await readAll()
+  const kept = all.filter((item) => item.roomId !== roomId)
+  await writeAll(kept)
   return []
 }
 
@@ -121,5 +146,5 @@ export function createEntry(text: string, source: ClipboardEntry['source'], imag
   }
 }
 
-export const historyLimit = MAX_ENTRIES
+export const historyLimit = MAX_ENTRIES_PER_ROOM
 export { normalize as normalizeHistory }

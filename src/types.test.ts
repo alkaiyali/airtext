@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createRoomCode, MAX_IMAGE_BYTES, MAX_SEALED_LENGTH, MAX_TEXT_LENGTH, roomInviteUrl } from './types'
+import { createRoomCode, MAX_CONFIRM_LENGTH, MAX_IMAGE_BYTES, MAX_PUBKEY_LENGTH, MAX_SEALED_LENGTH, MAX_TEXT_LENGTH, roomInviteUrl } from './types'
 
 describe('createRoomCode', () => {
   it('generates 8-character codes from the unambiguous alphabet', () => {
@@ -26,6 +26,8 @@ describe('client limits shared with the worker protocol', () => {
     expect(MAX_TEXT_LENGTH).toBe(100_000)
     expect(MAX_IMAGE_BYTES).toBe(350_000)
     expect(MAX_SEALED_LENGTH).toBe(900_000)
+    expect(MAX_PUBKEY_LENGTH).toBe(256)
+    expect(MAX_CONFIRM_LENGTH).toBe(128)
   })
 })
 

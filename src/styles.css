@@ -114,6 +114,7 @@ h2 { margin-bottom: 0; font-size: 25px; letter-spacing: -.045em; }
 .scanner-message { display: flex; align-items: center; gap: 9px; justify-content: center; padding: 17px 0 5px; color: #d9e1da; font-size: 12px; }
 .pulse-dot { background: var(--accent); animation: breathe 1.7s ease-in-out infinite; }
 .error-message { margin: 12px 0 0; padding: 11px 13px; color: #ffd5c5; font-size: 12px; line-height: 1.4; background: rgba(212, 105, 66, .16); border-radius: 6px; }
+.error-message--light { color: #a8453a; background: #f7e6e3; border: 1px solid #e2c5c0; }
 .center-button { display: block; margin: 13px auto 2px; color: #f8b69c; }
 .manual-code-form { padding: 16px 0 4px; color: #d9e1da; }
 .manual-code-form label { display: block; margin-bottom: 7px; font-size: 12px; }

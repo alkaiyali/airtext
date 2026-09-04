@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { blobToDataUrl } from '../lib/clipboard'
+import { downscaleToDataUrl } from '../lib/image'
 import { MAX_IMAGE_BYTES, MAX_TEXT_LENGTH } from '../types'
 
 interface ClipboardComposerProps {
   onShare: (text: string, image?: string) => Promise<void>
+  /** False while the ECDH handshake is still running: sharing is gated. */
+  canShare?: boolean
 }
 
 function CameraIcon() {
@@ -34,21 +37,32 @@ function PasteIcon() {
   )
 }
 
-export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
+export function ClipboardComposer({ onShare, canShare = true }: ClipboardComposerProps) {
   const [text, setText] = useState('')
   const [image, setImage] = useState('')
   const [message, setMessage] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [isProcessingImage, setIsProcessingImage] = useState(false)
 
-  function attachBlob(blob: Blob): void {
-    if (blob.size > MAX_IMAGE_BYTES) {
-      setMessage(`Image is too large. Keep it under ${MAX_IMAGE_BYTES / 1000} KB.`)
+  async function attachBlob(blob: Blob): Promise<void> {
+    if (!blob.type.startsWith('image/')) {
+      setMessage('Choose an image file.')
       return
     }
-    blobToDataUrl(blob).then((dataUrl) => {
+    setIsProcessingImage(true)
+    try {
+      // Downscale camera photos so they fit the room budget; tiny icons fall
+      // back to a plain data URL without recompression overhead.
+      const dataUrl = blob.size > MAX_IMAGE_BYTES || blob.type === 'image/png'
+        ? await downscaleToDataUrl(blob).catch(() => blobToDataUrl(blob))
+        : await blobToDataUrl(blob)
       setImage(dataUrl)
       setMessage('')
-    }).catch(() => setMessage('Could not read that image.'))
+    } catch {
+      setMessage(`Image is too large. Keep it under ${MAX_IMAGE_BYTES / 1000} KB.`)
+    } finally {
+      setIsProcessingImage(false)
+    }
   }
 
   // Catch Ctrl/⌘+V anywhere on the page, not just inside the textarea.
@@ -60,7 +74,7 @@ export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
       if (!imageItem) return
       event.preventDefault()
       const blob = imageItem.getAsFile()
-      if (blob) attachBlob(blob)
+      if (blob) void attachBlob(blob)
     }
     window.addEventListener('paste', onWindowPaste)
     return () => window.removeEventListener('paste', onWindowPaste)
@@ -76,7 +90,7 @@ export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
       for (const item of items) {
         const imageType = item.types.find((type) => type.startsWith('image/'))
         if (imageType) {
-          attachBlob(await item.getType(imageType))
+          await attachBlob(await item.getType(imageType))
           return
         }
       }
@@ -93,7 +107,7 @@ export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
     if (!imageItem) return
     event.preventDefault()
     const blob = imageItem.getAsFile()
-    if (blob) attachBlob(blob)
+    if (blob) void attachBlob(blob)
   }
 
   function pickImage(event: React.ChangeEvent<HTMLInputElement>): void {
@@ -104,7 +118,7 @@ export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
       setMessage('Choose an image file.')
       return
     }
-    attachBlob(file)
+    void attachBlob(file)
   }
 
   function clearImage(): void {
@@ -113,7 +127,7 @@ export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
 
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (isSending) return
+    if (isSending || !canShare) return
     const hasContent = text.trim().length > 0 || Boolean(image)
     if (!hasContent) return
     setIsSending(true)
@@ -139,11 +153,11 @@ export function ClipboardComposer({ onShare }: ClipboardComposerProps) {
       <textarea id="clipboard-text" value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} placeholder="Paste a link, note, command, or anything you need on the other screen…" rows={4} maxLength={MAX_TEXT_LENGTH} />
       {image ? <div className="image-preview"><img src={image} alt="Attached preview" /><button className="text-button" type="button" onClick={clearImage}>Remove image</button></div> : null}
       <div className="composer-footer">
-        <span className="composer-hint">{message || 'Text or image · up to 100,000 characters / 350 KB images'}</span>
+        <span className="composer-hint">{message || (canShare ? 'Text or image · up to 100,000 characters / 350 KB images' : 'Setting up the secure channel…')}</span>
         <div className="composer-actions">
-          <label className="media-button" title="Take a photo (under 350 KB)"><input type="file" accept="image/*" capture="environment" onChange={pickImage} hidden /><CameraIcon /> Camera</label>
-          <label className="media-button" title="Choose from gallery (under 350 KB)"><input type="file" accept="image/*" onChange={pickImage} hidden /><GalleryIcon /> Gallery</label>
-          <button className="primary-button" type="submit" disabled={(!text.trim() && !image) || isSending}>{isSending ? 'Sharing…' : 'Share text'} <span aria-hidden="true">↗</span></button>
+          <label className="media-button" title="Take a photo (auto-compressed under 350 KB)"><input type="file" accept="image/*" capture="environment" onChange={pickImage} hidden disabled={isProcessingImage} /><CameraIcon /> {isProcessingImage ? 'Adding…' : 'Camera'}</label>
+          <label className="media-button" title="Choose from gallery (auto-compressed under 350 KB)"><input type="file" accept="image/*" onChange={pickImage} hidden disabled={isProcessingImage} /><GalleryIcon /> Gallery</label>
+          <button className="primary-button" type="submit" disabled={(!text.trim() && !image) || isSending || isProcessingImage || !canShare}>{isSending ? 'Sharing…' : 'Share text'} <span aria-hidden="true">↗</span></button>
         </div>
       </div>
     </form>

@@ -11,6 +11,18 @@ describe('worker protocol', () => {
     expect(parseClientMessage({ type: 'clipboard-item', id: '1', text: 'plaintext', createdAt: 1 })).toBeNull()
   })
 
+  it('accepts key-exchange messages with an optional confirmation', () => {
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', createdAt: 1 })).not.toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', confirm: 'def', createdAt: 1 })).not.toBeNull()
+  })
+
+  it('rejects malformed key-exchange messages', () => {
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: '', createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'x'.repeat(257), createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', confirm: 'x'.repeat(129), createdAt: 1 })).toBeNull()
+  })
+
   it('accepts clear-history and ack messages', () => {
     expect(parseClientMessage({ type: 'clear-history' })).not.toBeNull()
     expect(parseClientMessage({ type: 'ack', id: 'item-1' })).not.toBeNull()
