@@ -30,11 +30,9 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number):
  * when the platform can't decode or encode it.
  */
 export async function downscaleToDataUrl(blob: Blob): Promise<string> {
-  if (!blob.type.startsWith('image/')) throw new Error('Choose an image file.')
-  if (blob.size <= MAX_IMAGE_BYTES) {
-    // Still normalize huge dimensions: a 12MP PNG under 350KB is rare, but a
-    // cheap resize saves IndexedDB quota and transfer time.
-  }
+  if (!blob.type.startsWith('image/')) throw new Error('That file is not an image. Choose a photo or screenshot instead.')
+  // Normalize huge dimensions even under the byte budget: a 12MP PNG under
+  // 350KB is rare, but a cheap resize saves IndexedDB quota and transfer time.
   const source = await blobToBitmap(blob)
   const width = 'width' in source ? source.width : (source as HTMLImageElement).naturalWidth
   const height = 'height' in source ? source.height : (source as HTMLImageElement).naturalHeight
@@ -60,7 +58,7 @@ export async function downscaleToDataUrl(blob: Blob): Promise<string> {
   }
   const fallback = await canvasToBlob(canvas, 'image/jpeg', 0.35)
   if (fallback && fallback.size <= MAX_IMAGE_BYTES * 1.1) return await originalToDataUrl(fallback)
-  throw new Error(`Image is too large. Keep it under ${Math.round(MAX_IMAGE_BYTES / 1000)} KB after compression.`)
+  throw new Error(`This image is still too large after compressing. Try a smaller one, or take a new photo.`)
 }
 
 async function originalToDataUrl(blob: Blob): Promise<string> {

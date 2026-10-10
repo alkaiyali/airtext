@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createRoomCode, MAX_CONFIRM_LENGTH, MAX_IMAGE_BYTES, MAX_PUBKEY_LENGTH, MAX_SEALED_LENGTH, MAX_TEXT_LENGTH, roomInviteUrl } from './types'
+import { createRoomCode, isSafeImageDataUrl, MAX_CONFIRM_LENGTH, MAX_IMAGE_BYTES, MAX_PUBKEY_LENGTH, MAX_SEALED_LENGTH, MAX_TEXT_LENGTH, roomInviteUrl } from './types'
 
 describe('createRoomCode', () => {
   it('generates 8-character codes from the unambiguous alphabet', () => {
@@ -38,5 +38,20 @@ describe('roomInviteUrl', () => {
     const stubWindow = { location: { href: 'https://airtext.example/pairing?stale=1#old' } } as unknown as Window & typeof globalThis
     globalThis.window = stubWindow
     expect(roomInviteUrl('AB12CD34')).toBe('https://airtext.example/pairing?join=AB12CD34')
+  })
+})
+
+describe('isSafeImageDataUrl', () => {
+  it('accepts base64 raster data URLs produced by the image pipeline', () => {
+    expect(isSafeImageDataUrl('data:image/webp;base64,UklGRg==')).toBe(true)
+    expect(isSafeImageDataUrl('data:image/jpeg;base64,/9j/4AAQ')).toBe(true)
+  })
+
+  it('rejects remote URLs, SVG, and other schemes from the peer', () => {
+    expect(isSafeImageDataUrl('https://tracker.example/pixel.png')).toBe(false)
+    expect(isSafeImageDataUrl('data:image/svg+xml;base64,PHN2Zz4=')).toBe(false)
+    expect(isSafeImageDataUrl('javascript:alert(1)')).toBe(false)
+    expect(isSafeImageDataUrl('data:image/png;base64,AAAA"onerror="x')).toBe(false)
+    expect(isSafeImageDataUrl(42)).toBe(false)
   })
 })

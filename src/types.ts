@@ -14,11 +14,11 @@ export interface ClipboardEntry {
 export type RoomStatus = 'idle' | 'connecting' | 'waiting' | 'connected' | 'disconnected' | 'error'
 
 export type ClientMessage =
-  | { type: 'hello'; version: 1; device: DeviceKind }
+  | { type: 'hello'; version: 1; device: DeviceKind; resume?: string }
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number }
   | { type: 'key-exchange'; id: string; publicKey: string; confirm?: string; createdAt: number }
   | { type: 'ack'; id: string }
-  | { type: 'clear-history' }
+  | { type: 'clear-history'; sealed: string }
   | { type: 'ping'; timestamp: number }
 
 export type ServerMessage =
@@ -28,7 +28,7 @@ export type ServerMessage =
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number; source: DeviceKind }
   | { type: 'key-exchange'; id: string; publicKey: string; confirm?: string; createdAt: number; source: DeviceKind }
   | { type: 'ack'; id: string }
-  | { type: 'clear-history' }
+  | { type: 'clear-history'; sealed: string }
   | { type: 'pong'; timestamp: number }
   | { type: 'error'; code: string; message: string }
 
@@ -44,7 +44,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
     return typeof message.peers === 'number'
   }
   if (message.type === 'ack') return typeof message.id === 'string'
-  if (message.type === 'clear-history') return true
+  if (message.type === 'clear-history') return typeof message.sealed === 'string'
   if (message.type === 'clipboard-item') {
     return typeof message.id === 'string' && typeof message.sealed === 'string' && typeof message.createdAt === 'number' && (message.source === 'desktop' || message.source === 'phone')
   }
@@ -65,7 +65,13 @@ export function isServerMessage(value: unknown): value is ServerMessage {
 export function isClientMessage(value: unknown): value is ClientMessage {
   if (!value || typeof value !== 'object') return false
   const message = value as Record<string, unknown>
-  if (message.type === 'hello') return message.version === 1 && (message.device === 'desktop' || message.device === 'phone')
+  if (message.type === 'hello') {
+    return (
+      message.version === 1 &&
+      (message.device === 'desktop' || message.device === 'phone') &&
+      (message.resume === undefined || typeof message.resume === 'string')
+    )
+  }
   if (message.type === 'clipboard-item') {
     return typeof message.id === 'string' && typeof message.sealed === 'string' && typeof message.createdAt === 'number'
   }
@@ -78,9 +84,17 @@ export function isClientMessage(value: unknown): value is ClientMessage {
     )
   }
   if (message.type === 'ack') return typeof message.id === 'string'
-  if (message.type === 'clear-history') return true
+  if (message.type === 'clear-history') return typeof message.sealed === 'string'
   if (message.type === 'ping') return typeof message.timestamp === 'number'
   return false
+}
+
+// Shared images are always produced by image.ts as base64 webp/jpeg. Anything
+// else from the peer (remote URLs, SVG, other schemes) is dropped.
+const SAFE_IMAGE_DATA_URL = /^data:image\/(?:webp|jpeg|png|gif);base64,[A-Za-z0-9+/]+=*$/
+
+export function isSafeImageDataUrl(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_SEALED_LENGTH && SAFE_IMAGE_DATA_URL.test(value)
 }
 
 export function getRoomIdFromCode(code: string): string | null {

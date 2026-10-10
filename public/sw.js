@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
-const CACHE_NAME = 'airtext-v4'
-const CORE_ASSETS = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png']
+const CACHE_NAME = 'airtext-v5'
+const CORE_ASSETS = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/fonts/instrument-sans-latin-wght.woff2']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

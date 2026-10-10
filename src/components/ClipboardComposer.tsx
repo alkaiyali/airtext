@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { blobToDataUrl } from '../lib/clipboard'
 import { downscaleToDataUrl } from '../lib/image'
+import { ArrowUpRightIcon } from './icons'
 import { MAX_IMAGE_BYTES, MAX_TEXT_LENGTH } from '../types'
 
 interface ClipboardComposerProps {
@@ -43,10 +44,14 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
   const [message, setMessage] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [isProcessingImage, setIsProcessingImage] = useState(false)
+  // The file inputs stay hidden so the visible media controls can be real
+  // buttons — focusable and in the tab order, unlike a hidden input.
+  const cameraInputRef = useRef<HTMLInputElement>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
 
   async function attachBlob(blob: Blob): Promise<void> {
     if (!blob.type.startsWith('image/')) {
-      setMessage('Choose an image file.')
+      setMessage('That file is not an image. Choose a photo or screenshot instead.')
       return
     }
     setIsProcessingImage(true)
@@ -59,7 +64,7 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
       setImage(dataUrl)
       setMessage('')
     } catch {
-      setMessage(`Image is too large. Keep it under ${MAX_IMAGE_BYTES / 1000} KB.`)
+      setMessage(`This image is still too large after compressing. Try a smaller one.`)
     } finally {
       setIsProcessingImage(false)
     }
@@ -82,7 +87,7 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
 
   async function pasteFromClipboard(): Promise<void> {
     if (!navigator.clipboard?.read) {
-      setMessage('Clipboard reading is not supported here. Use Ctrl/⌘+V instead.')
+      setMessage('This browser cannot read the clipboard here. Use Ctrl/⌘+V instead.')
       return
     }
     try {
@@ -98,7 +103,7 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
       setText(pastedText)
       setMessage('Pasted from this device.')
     } catch {
-      setMessage('Clipboard access was blocked. Allow it in browser settings, or use Ctrl/⌘+V.')
+      setMessage('The browser blocked clipboard access. Allow it in site settings, or use Ctrl/⌘+V.')
     }
   }
 
@@ -115,7 +120,7 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
     event.target.value = ''
     if (!file) return
     if (!file.type.startsWith('image/')) {
-      setMessage('Choose an image file.')
+      setMessage('That file is not an image. Choose a photo or screenshot instead.')
       return
     }
     void attachBlob(file)
@@ -136,7 +141,7 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
       await onShare(text, image || undefined)
       setText('')
       clearImage()
-      setMessage('Shared with your other device.')
+      setMessage('Sent to your other device.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not share this item.')
     } finally {
@@ -147,17 +152,19 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
   return (
     <form className="composer" onSubmit={submit}>
       <div className="composer-label-row">
-        <label htmlFor="clipboard-text">Share a text snippet</label>
+        <label htmlFor="clipboard-text">Share to the other device</label>
         <button className="text-button paste-button" type="button" onClick={pasteFromClipboard}><PasteIcon /> Paste from clipboard</button>
       </div>
-      <textarea id="clipboard-text" value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} placeholder="Paste a link, note, command, or anything you need on the other screen…" rows={4} maxLength={MAX_TEXT_LENGTH} />
+      <textarea id="clipboard-text" value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} placeholder="Paste a link, note, or code — or type it here…" rows={4} maxLength={MAX_TEXT_LENGTH} />
       {image ? <div className="image-preview"><img src={image} alt="Attached preview" /><button className="text-button" type="button" onClick={clearImage}>Remove image</button></div> : null}
       <div className="composer-footer">
-        <span className="composer-hint">{message || (canShare ? 'Text or image · up to 100,000 characters / 350 KB images' : 'Setting up the secure channel…')}</span>
+        <span className="composer-hint">{message || (canShare ? 'Text or image · text up to 100,000 characters · images compressed to fit 350 KB' : 'Setting up the secure channel…')}</span>
         <div className="composer-actions">
-          <label className="media-button" title="Take a photo (auto-compressed under 350 KB)"><input type="file" accept="image/*" capture="environment" onChange={pickImage} hidden disabled={isProcessingImage} /><CameraIcon /> {isProcessingImage ? 'Adding…' : 'Camera'}</label>
-          <label className="media-button" title="Choose from gallery (auto-compressed under 350 KB)"><input type="file" accept="image/*" onChange={pickImage} hidden disabled={isProcessingImage} /><GalleryIcon /> Gallery</label>
-          <button className="primary-button" type="submit" disabled={(!text.trim() && !image) || isSending || isProcessingImage || !canShare}>{isSending ? 'Sharing…' : 'Share text'} <span aria-hidden="true">↗</span></button>
+          <button className="media-button" type="button" title="Take a photo — compressed automatically to fit 350 KB" aria-label="Camera: take a photo" onClick={() => cameraInputRef.current?.click()} disabled={isProcessingImage}><CameraIcon /> {isProcessingImage ? 'Preparing…' : 'Camera'}</button>
+          <button className="media-button" type="button" title="Choose an image from your gallery — compressed automatically to fit 350 KB" aria-label="Gallery: choose an image" onClick={() => galleryInputRef.current?.click()} disabled={isProcessingImage}><GalleryIcon /> Gallery</button>
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={pickImage} hidden />
+          <input ref={galleryInputRef} type="file" accept="image/*" onChange={pickImage} hidden />
+          <button className="primary-button" type="submit" disabled={(!text.trim() && !image) || isSending || isProcessingImage || !canShare}>{isSending ? 'Sharing…' : 'Share'} <ArrowUpRightIcon /></button>
         </div>
       </div>
     </form>

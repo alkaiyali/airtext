@@ -23,8 +23,16 @@ describe('worker protocol', () => {
     expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', confirm: 'x'.repeat(129), createdAt: 1 })).toBeNull()
   })
 
-  it('accepts clear-history and ack messages', () => {
-    expect(parseClientMessage({ type: 'clear-history' })).not.toBeNull()
+  it('accepts hello with an optional bounded resume token', () => {
+    expect(parseClientMessage({ type: 'hello', version: 1, device: 'phone', resume: 'r'.repeat(32) })).not.toBeNull()
+    expect(parseClientMessage({ type: 'hello', version: 1, device: 'phone', resume: '' })).toBeNull()
+    expect(parseClientMessage({ type: 'hello', version: 1, device: 'phone', resume: 'r'.repeat(65) })).toBeNull()
+  })
+
+  it('accepts only sealed clear-history and bounded ack messages', () => {
+    expect(parseClientMessage({ type: 'clear-history', sealed: 'abc.def' })).not.toBeNull()
+    expect(parseClientMessage({ type: 'clear-history' })).toBeNull()
+    expect(parseClientMessage({ type: 'clear-history', sealed: 'x'.repeat(513) })).toBeNull()
     expect(parseClientMessage({ type: 'ack', id: 'item-1' })).not.toBeNull()
     expect(parseClientMessage({ type: 'ack', id: '' })).not.toBeNull()
     expect(parseClientMessage({ type: 'ack', id: 'x'.repeat(81) })).toBeNull()

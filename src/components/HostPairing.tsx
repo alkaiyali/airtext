@@ -1,25 +1,31 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { RoomStatus } from '../types'
 import { roomInviteUrl } from '../types'
 import { ConnectionStatus } from './ConnectionStatus'
+import { CheckIcon, CopyIcon } from './icons'
 
 interface HostPairingProps {
   code: string
   status: RoomStatus
-  onConnect: (code: string) => void
+  onRetry: () => void
   onReset: () => void
 }
 
-export function HostPairing({ code, status, onConnect, onReset }: HostPairingProps) {
+function waitCopy(status: RoomStatus): string {
+  if (status === 'waiting') {
+    return 'Scan the QR code with your phone’s camera, or type the code above. Keep this tab open.'
+  }
+  if (status === 'error' || status === 'disconnected') {
+    return 'Couldn’t reach the room. Check your connection, then Retry — or Start over with a new room.'
+  }
+  return 'Opening the room…'
+}
+
+export function HostPairing({ code, status, onRetry, onReset }: HostPairingProps) {
   const [qrData, setQrData] = useState('')
   const [qrError, setQrError] = useState('')
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
-  const onConnectRef = useRef(onConnect)
-
-  useEffect(() => {
-    onConnectRef.current = onConnect
-  }, [onConnect])
 
   useEffect(() => {
     let cancelled = false
@@ -32,7 +38,7 @@ export function HostPairing({ code, status, onConnect, onReset }: HostPairingPro
     }).then((data) => {
       if (!cancelled && data) setQrData(data)
     }).catch(() => {
-      if (!cancelled) setQrError('Could not draw the QR code. Use the 8-character code below.')
+      if (!cancelled) setQrError('Could not draw the QR code. Type the 8-character code below instead.')
     })
     return () => { cancelled = true }
   }, [code])
@@ -48,33 +54,34 @@ export function HostPairing({ code, status, onConnect, onReset }: HostPairingPro
     }
   }
 
-  function startPairing(): void {
-    if (code) onConnect(code)
-  }
+  const waiting = status === 'idle' || status === 'connecting' || status === 'waiting'
 
   return (
     <section className="pairing-shell" aria-labelledby="host-title">
       <div className="pairing-copy">
-        <ConnectionStatus status={status} onReset={onReset} />
+        <ConnectionStatus status={status} device="desktop" onRetry={onRetry} onReset={onReset} />
         <p className="eyebrow">Computer host</p>
-        <h1 id="host-title">Scan this from your phone.</h1>
-        <p className="lede">Keep this tab open. Your phone will join this temporary room and everything you share will appear below.</p>
-        <div className="steps" aria-label="Pairing steps">
-          <div className="step is-active"><span>01</span><p><strong>Open the camera</strong><small>Point it at the code on this screen.</small></p></div>
-          <div className="step"><span>02</span><p><strong>Share from either device</strong><small>Each new item stays in local history.</small></p></div>
+        <h1 id="host-title">Scan this code from your phone.</h1>
+        <p className="lede">Keep this tab open. Your phone joins this room by scanning the code, and everything you share appears on both screens.</p>
+        <div className="steps" role="list" aria-label="Pairing steps">
+          <div className="step" role="listitem"><span aria-hidden="true">01</span><p><strong>Scan this screen</strong><small>On your phone, open the camera and scan the QR code.</small></p></div>
+          <div className="step" role="listitem"><span aria-hidden="true">02</span><p><strong>Share from either device</strong><small>Each new item stays in local history.</small></p></div>
         </div>
       </div>
       <div className="qr-panel">
         <div className="qr-frame">
-          {qrData ? <img src={qrData} alt={`QR code to join room ${code}`} /> : qrError ? <div className="qr-loading" role="alert">{qrError}</div> : <div className="qr-loading">Preparing room…</div>}
+          {qrData ? <img src={qrData} alt="QR code that opens this room on your phone" /> : qrError ? <div className="qr-loading" role="alert">{qrError}</div> : <div className="qr-loading">Preparing room…</div>}
         </div>
         <div className="code-block">
-          <span className="label">Or enter this 8-character code</span>
-          <div className="code-row"><strong>{code.slice(0, 4)} {code.slice(4)}</strong><button className="icon-button" type="button" onClick={copyCode} aria-label="Copy room code">{copied ? '✓' : '⧉'}</button></div>
-          {copyFailed ? <p className="micro-copy" role="alert">Copy was blocked — long-press the code to copy it manually.</p> : null}
+          <span className="label">Or type this on your phone</span>
+          <div className="code-row"><strong>{code.slice(0, 4)} {code.slice(4)}</strong><button className="icon-button" type="button" onClick={copyCode} aria-label={copied ? 'Room code copied' : 'Copy room code'} title="Copy room code">{copied ? <CheckIcon /> : <CopyIcon />}</button></div>
+          {copyFailed ? <p className="micro-copy" role="alert">Copying was blocked by the browser — select the code and copy it yourself.</p> : null}
         </div>
-        <button className="primary-button full-width" type="button" onClick={startPairing}>{status === 'connected' ? 'Open clipboard' : 'Start room'}</button>
-        <p className="micro-copy">The room closes automatically after 30 minutes of inactivity.</p>
+        <div className="pairing-wait">
+          <span className={waiting ? 'pulse-dot' : 'status-dot'} aria-hidden="true" />
+          <p>{waitCopy(status)}</p>
+        </div>
+        <p className="micro-copy">The room closes 30 minutes after the last device leaves. Activity keeps it open.</p>
       </div>
     </section>
   )

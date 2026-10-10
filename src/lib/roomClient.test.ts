@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getRoomIdFromCode, MAX_SEALED_LENGTH, MAX_TEXT_LENGTH } from '../types'
 import { deriveSession, exportPublicKey, generateKeyPair, makeConfirm, open } from './crypto'
 import { parseInvite, RoomClient, type RoomClientEvent } from './roomClient'
@@ -33,12 +33,46 @@ const stubWindow = {
   clearTimeout: (id: unknown) => clearTimeout(id as NodeJS.Timeout),
 } as unknown as Window & typeof globalThis
 globalThis.window = stubWindow
-const stubWebSocket = { OPEN: 1 } as unknown as typeof WebSocket
+const stubWebSocket = { OPEN: 1, CONNECTING: 0 } as unknown as typeof WebSocket
 globalThis.WebSocket = stubWebSocket
 
 interface SentMessage {
   sealed: string
 }
+
+describe('connect timeout', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports the timeout and keeps retrying with backoff when the socket never opens', () => {
+    vi.useFakeTimers()
+    const events: RoomClientEvent[] = []
+    const opened: Array<{ closed: boolean }> = []
+    const client = new RoomClient('AB12CD34', 'desktop', () => {
+      const fake = {
+        readyState: 0,
+        closed: false,
+        send: () => undefined,
+        close() { this.closed = true },
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }
+      opened.push(fake)
+      return fake as unknown as WebSocket
+    })
+    client.subscribe((event) => events.push(event))
+    client.connect()
+    vi.advanceTimersByTime(10_000)
+    const timeout = events.find((event) => event.type === 'status' && event.status === 'error')
+    expect(timeout).toMatchObject({ message: 'Could not reach the room. Retrying…' })
+    expect(opened[0].closed).toBe(true)
+    // A hung upgrade is usually a dead network that comes back: try again.
+    vi.advanceTimersByTime(1_000)
+    expect(opened).toHaveLength(2)
+    client.close()
+  })
+})
 
 describe('reconnect', () => {
   it('retry() opens a fresh socket after a failure', () => {
@@ -116,7 +150,7 @@ describe('secure channel', () => {
     const sockets: { a: RelaySocket | null; b: RelaySocket | null } = { a: null, b: null }
     function route(from: 'a' | 'b', sender: 'desktop' | 'phone', data: string): void {
       const message = JSON.parse(data) as { type: string }
-      if (message.type !== 'key-exchange' && message.type !== 'clipboard-item' && message.type !== 'ack') return
+      if (!['key-exchange', 'clipboard-item', 'ack', 'clear-history'].includes(message.type)) return
       const target = from === 'a' ? sockets.b : sockets.a
       target?.deliver({ ...message, source: sender })
     }
@@ -131,7 +165,7 @@ describe('secure channel', () => {
     a.subscribe((event) => eventsA.push(event))
     b.subscribe((event) => eventsB.push(event))
     return {
-      a, b, eventsA, eventsB,
+      a, b, eventsA, eventsB, sockets,
       open() {
         sockets.a?.open()
         sockets.b?.open()
@@ -167,6 +201,43 @@ describe('secure channel', () => {
     expect(decrypted?.payload.text).toBe('hello phone')
     expect(decrypted?.payload.id).toBe('id-9')
     pair.close()
+  })
+
+  it('clears the peer history only via a sealed, non-replayable control', async () => {
+    const pair = linkedPair('AB12CD34')
+    const relayedClears: unknown[] = []
+    pair.a.connect()
+    pair.b.connect()
+    pair.open()
+    await waitFor(() => fingerprint(pair.eventsA) !== '' && fingerprint(pair.eventsB) !== '', 'secure channel')
+    const sendA = pair.sockets.a!.send.bind(pair.sockets.a!)
+    pair.sockets.a!.send = (data: string) => {
+      if (JSON.parse(data).type === 'clear-history') relayedClears.push(JSON.parse(data))
+      sendA(data)
+    }
+    expect(await pair.a.sendClearHistory()).toBe(true)
+    await waitFor(() => pair.eventsB.some((event) => event.type === 'cleared'), 'cleared')
+
+    // A forged control (relay or stranger without the key) and a replay are ignored.
+    pair.sockets.b!.deliver({ type: 'clear-history', sealed: 'AAAAAAAAAAAAAAAA.AAAA' })
+    pair.sockets.b!.deliver({ ...(relayedClears[0] as object), source: 'desktop' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(pair.eventsB.filter((event) => event.type === 'cleared')).toHaveLength(1)
+    pair.close()
+  })
+
+  it('identifies with its resume token in hello', async () => {
+    const sent: string[] = []
+    const holder: { socket: RelaySocket | null } = { socket: null }
+    const client = new RoomClient('AB12CD34', 'phone', () => {
+      holder.socket = new RelaySocket((data) => { sent.push(data) })
+      return holder.socket as unknown as WebSocket
+    }, 'tab-token')
+    client.connect()
+    holder.socket?.open()
+    await waitFor(() => sent.some((data) => JSON.parse(data).type === 'hello'), 'hello')
+    expect(JSON.parse(sent.find((data) => JSON.parse(data).type === 'hello')!)).toMatchObject({ resume: 'tab-token' })
+    client.close()
   })
 
   it('refuses to share before the channel is secure', async () => {
@@ -208,7 +279,7 @@ describe('sendClipboardItem size guard', () => {
       source: 'phone',
     })
     await waitFor(() => events.some((event) => event.type === 'secure'), 'secure')
-    return { client, sent, session }
+    return { client, sent, session, holder, peerPub }
   }
 
   it('sends an item at the documented text limit', async () => {
@@ -224,6 +295,24 @@ describe('sendClipboardItem size guard', () => {
     await client.sendClipboardItem('id-3', 3, { text: 'peer readable', kind: 'text' })
     const sealed = (JSON.parse(sent[sent.length - 1]) as SentMessage).sealed
     expect(await open(session.messageKey, sealed)).toContain('peer readable')
+    client.close()
+  })
+
+  it('resends unacknowledged items after the channel re-secures', async () => {
+    const { client, sent, session, holder, peerPub } = await securedClient()
+    await client.sendClipboardItem('lost', 1, { text: 'dropped in flight', kind: 'text' })
+    await client.sendClipboardItem('acked', 2, { text: 'made it', kind: 'text' })
+    holder.socket?.deliver({ type: 'ack', id: 'acked' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    // The link drops and comes back; the peer re-confirms the same session.
+    client.retry()
+    holder.socket?.open()
+    holder.socket?.deliver({ type: 'key-exchange', id: 'peer-2', publicKey: peerPub, confirm: await makeConfirm(session.confirmKey, peerPub), createdAt: 2, source: 'phone' })
+    const before = sent.length
+    await waitFor(() => sent.slice(before).some((data) => JSON.parse(data).type === 'clipboard-item'), 'resend')
+    const resent = sent.slice(before).map((data) => JSON.parse(data) as { type: string; id?: string }).filter((m) => m.type === 'clipboard-item')
+    expect(resent.map((m) => m.id)).toEqual(['lost'])
     client.close()
   })
 

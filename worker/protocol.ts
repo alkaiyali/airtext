@@ -3,11 +3,11 @@
 export type DeviceKind = 'desktop' | 'phone'
 
 export type ClientMessage =
-  | { type: 'hello'; version: 1; device: DeviceKind }
+  | { type: 'hello'; version: 1; device: DeviceKind; resume?: string }
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number }
   | { type: 'key-exchange'; id: string; publicKey: string; confirm?: string; createdAt: number }
   | { type: 'ack'; id: string }
-  | { type: 'clear-history' }
+  | { type: 'clear-history'; sealed: string }
   | { type: 'ping'; timestamp: number }
 
 export type ServerMessage =
@@ -17,7 +17,7 @@ export type ServerMessage =
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number; source: DeviceKind }
   | { type: 'key-exchange'; id: string; publicKey: string; confirm?: string; createdAt: number; source: DeviceKind }
   | { type: 'ack'; id: string }
-  | { type: 'clear-history' }
+  | { type: 'clear-history'; sealed: string }
   | { type: 'pong'; timestamp: number }
   | { type: 'error'; code: string; message: string }
 
@@ -30,11 +30,22 @@ export const MAX_CONFIRM_LENGTH = 128
 // 350 KB image — still fits after AES-GCM + base64 (~760 KB worst case),
 // while staying under the ~1 MiB per-frame WebSocket limit.
 const MAX_SEALED_LENGTH = 900_000
+// Per-session secret a client presents in hello so it can replace its own
+// still-live socket on reconnect; anyone else needs the old socket to go stale.
+export const MAX_RESUME_LENGTH = 64
+// A sealed clear-history control (id + timestamp) is well under 200 chars.
+export const MAX_SEALED_CONTROL_LENGTH = 512
 
 export function parseClientMessage(value: unknown): ClientMessage | null {
   if (!value || typeof value !== 'object') return null
   const message = value as Record<string, unknown>
-  if (message.type === 'hello' && message.version === 1 && (message.device === 'desktop' || message.device === 'phone')) {
+  if (
+    message.type === 'hello' &&
+    message.version === 1 &&
+    (message.device === 'desktop' || message.device === 'phone') &&
+    (message.resume === undefined ||
+      (typeof message.resume === 'string' && message.resume.length > 0 && message.resume.length <= MAX_RESUME_LENGTH))
+  ) {
     return message as ClientMessage
   }
   if (
@@ -63,7 +74,14 @@ export function parseClientMessage(value: unknown): ClientMessage | null {
   }
   if (message.type === 'ping' && typeof message.timestamp === 'number') return message as ClientMessage
   if (message.type === 'ack' && typeof message.id === 'string' && message.id.length <= 80) return message as ClientMessage
-  if (message.type === 'clear-history') return message as ClientMessage
+  if (
+    message.type === 'clear-history' &&
+    typeof message.sealed === 'string' &&
+    message.sealed.length > 0 &&
+    message.sealed.length <= MAX_SEALED_CONTROL_LENGTH
+  ) {
+    return message as ClientMessage
+  }
   return null
 }
 

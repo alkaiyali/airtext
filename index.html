@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f4f0e8" />
+    <!-- Self-hosted in public/fonts: fetch the one file the UI renders in before
+         the stylesheet arrives, so the swap lands before first paint. The
+         latin-ext file loads only when those characters appear. -->
+    <link rel="preload" href="/fonts/instrument-sans-latin-wght.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Blocking, before the app bundle: a saved dark room is dark from the first paint. -->
+    <script src="/theme.js"></script>
     <meta name="description" content="A tiny clipboard bridge between your computer and phone." />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />

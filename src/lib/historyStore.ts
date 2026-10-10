@@ -66,24 +66,37 @@ async function readAll(): Promise<ClipboardEntry[]> {
   }
 }
 
-async function writeAll(entries: Promise<ClipboardEntry[]> | ClipboardEntry[]): Promise<void> {
-  const merged = (await entries).slice(0, MAX_ENTRIES_TOTAL)
+// Write only what changed. Clearing the store and re-putting every entry made
+// each share rewrite up to 200 entries — every base64 image among them — so
+// the phone paid serialization of hundreds of KB (or a few MB) per change.
+// `merged` is the desired end state (and the cap); `put` holds the entries that
+// are new or changed. Stored entries absent from `merged` are pruned.
+async function writeChanges(put: ClipboardEntry[], merged: ClipboardEntry[]): Promise<void> {
+  const next = merged.slice(0, MAX_ENTRIES_TOTAL)
   if (!('indexedDB' in window)) {
-    fallbackWrite(merged)
+    fallbackWrite(next)
     return
   }
   try {
     const db = await openDatabase()
+    const wanted = new Set(next.map((item) => item.id))
     const { promise, resolve, reject } = Promise.withResolvers<void>()
     const transaction = db.transaction(STORE_NAME, 'readwrite')
     const store = transaction.objectStore(STORE_NAME)
-    store.clear()
-    merged.forEach((item) => store.put(item))
+    const keys = store.getAllKeys()
+    keys.onsuccess = () => {
+      for (const key of keys.result) {
+        if (!wanted.has(String(key))) store.delete(key)
+      }
+      put.forEach((item) => store.put(item))
+    }
+    keys.onerror = () => reject(keys.error)
     transaction.oncomplete = () => resolve()
     transaction.onerror = () => reject(transaction.error)
+    transaction.onabort = () => reject(transaction.error)
     await promise
   } catch {
-    fallbackWrite(merged)
+    fallbackWrite(next)
   }
 }
 
@@ -99,14 +112,18 @@ export async function saveEntry(entry: ClipboardEntry, roomId: string): Promise<
   const all = await readAll()
   const others = all.filter((item) => item.roomId !== roomId)
   const mine = normalize([stamped, ...all.filter((item) => item.roomId === roomId)])
-  await writeAll([...mine, ...others])
+  // Only the new entry needs writing — and only if it survived normalization
+  // (a blank payload would otherwise be stored but never shown).
+  const put = mine.some((item) => item.id === stamped.id) ? [stamped] : []
+  await writeChanges(put, [...mine, ...others])
   return mine
 }
 
 export async function deleteEntry(id: string, roomId: string): Promise<ClipboardEntry[]> {
   const all = await readAll()
-  await writeAll(all.filter((item) => !(item.id === id && item.roomId === roomId)))
-  return visibleEntries(all.filter((item) => !(item.id === id && item.roomId === roomId)), roomId)
+  const kept = all.filter((item) => !(item.id === id && item.roomId === roomId))
+  await writeChanges([], kept)
+  return visibleEntries(kept, roomId)
 }
 
 /** Clears only the given room when provided; clears everything for legacy callers. */
@@ -131,7 +148,7 @@ export async function clearHistory(roomId?: string): Promise<ClipboardEntry[]> {
   }
   const all = await readAll()
   const kept = all.filter((item) => item.roomId !== roomId)
-  await writeAll(kept)
+  await writeChanges([], kept)
   return []
 }
 
