@@ -2,7 +2,7 @@
 
 A small clipboard bridge between a computer and a phone. Open the app on the computer, scan its QR code from the phone, and share text between both screens.
 
-**→ Try the live demo: [airtext.holistic.workers.dev](https://airtext.holistic.workers.dev/)** (camera access recommended for QR pairing)
+**→ Try the live demo: [airtext.alkaiyali.com](https://airtext.alkaiyali.com/)** (camera access recommended for QR pairing)
 
 ![airtext pairing screen](docs/airtext.png)
 

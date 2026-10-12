@@ -1,6 +1,11 @@
 name = "airtext"
 main = "worker/index.ts"
 compatibility_date = "2026-08-14"
+workers_dev = false
+
+[[routes]]
+pattern = "airtext.alkaiyali.com"
+custom_domain = true
 
 [assets]
 directory = "./dist"
