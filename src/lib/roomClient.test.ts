@@ -226,6 +226,30 @@ describe('secure channel', () => {
     pair.close()
   })
 
+  it('emits a replayed clipboard item once while still acking it', async () => {
+    const pair = linkedPair('AB12CD34')
+    pair.a.connect()
+    pair.b.connect()
+    pair.open()
+    await waitFor(() => fingerprint(pair.eventsA) !== '' && fingerprint(pair.eventsB) !== '', 'secure channel')
+    const sentA: string[] = []
+    const sendA = pair.sockets.a!.send.bind(pair.sockets.a!)
+    pair.sockets.a!.send = (data: string) => {
+      sentA.push(data)
+      sendA(data)
+    }
+    await pair.a.sendClipboardItem('replay-1', 7, { text: 'say once', kind: 'text' })
+    await waitFor(() => pair.eventsB.some((event) => event.type === 'decrypted'), 'delivery')
+
+    // A malicious relay replaying the same sealed bytes is acked (to quench
+    // sender resends) but never emitted twice.
+    const relayed = JSON.parse(sentA.find((data) => JSON.parse(data).type === 'clipboard-item')!) as object
+    pair.sockets.b!.deliver({ ...relayed, source: 'desktop' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(pair.eventsB.filter((event) => event.type === 'decrypted')).toHaveLength(1)
+    pair.close()
+  })
+
   it('identifies with its resume token in hello', async () => {
     const sent: string[] = []
     const holder: { socket: RelaySocket | null } = { socket: null }

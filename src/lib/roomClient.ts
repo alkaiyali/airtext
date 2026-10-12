@@ -33,6 +33,16 @@ const CONNECT_TIMEOUT_MS = 10_000
 // lose an item in flight). Spaced just over the relay's 1 item/second limit.
 const MAX_OUTBOX = 20
 const RESEND_SPACING_MS = 1_100
+// Cap replay memories so a malicious relay cannot grow them without bound.
+const MAX_SEEN_IDS = 200
+
+function rememberSeen(seen: Set<string>, id: string): void {
+  if (seen.size >= MAX_SEEN_IDS) {
+    const oldest = seen.values().next().value
+    if (oldest !== undefined) seen.delete(oldest)
+  }
+  seen.add(id)
+}
 
 export type SocketFactory = (url: string) => WebSocket
 
@@ -58,6 +68,9 @@ export class RoomClient {
   private resendTimer: number | undefined
   // Replayed clear-history controls (same sealed bytes) are ignored.
   private readonly seenClears = new Set<string>()
+  // Relayed clipboard ids already delivered: a replayed relay message is
+  // acked again (to quench sender resends) but never emitted twice.
+  private readonly seenClipboardIds = new Set<string>()
 
   constructor(
     private readonly code: string,
@@ -358,13 +371,21 @@ export class RoomClient {
         if (plaintext === null) return
         const control = JSON.parse(plaintext) as { type?: unknown; id?: unknown }
         if (control.type !== 'clear-history' || typeof control.id !== 'string' || this.seenClears.has(control.id)) return
-        this.seenClears.add(control.id)
+        rememberSeen(this.seenClears, control.id)
         this.emit({ type: 'cleared' })
         return
       }
       if (message.type === 'clipboard-item') {
+        // Defense in depth: the relay validates these, but a compromised relay
+        // could still send oversized/empty ids to burn decrypt CPU.
+        if (!message.id || message.sealed.length > MAX_SEALED_LENGTH) return
+        if (this.seenClipboardIds.has(message.id)) {
+          this.send({ type: 'ack', id: message.id })
+          return
+        }
         const plaintext = await this.openSealed(message.sealed)
         if (plaintext !== null) {
+          rememberSeen(this.seenClipboardIds, message.id)
           this.emit({
             type: 'decrypted',
             // Fall back to the outer message's metadata for old-format senders

@@ -13,6 +13,14 @@ interface Attachment {
   lastContentAt: number
   lastKeyExchangeAt: number
   keyExchangeTokens: number
+  /** Global per-socket flood budget covering every message kind. */
+  messageTokens: number
+  lastRefillAt: number
+  lastHelloAt: number
+  lastPingAt: number
+  lastControlAt: number
+  /** Garbage/rate-limit strikes; the socket is shed past the cap. */
+  violations: number
 }
 
 const ROOM_TTL_MS = 30 * 60 * 1000
@@ -33,9 +41,38 @@ const HELLO_TIMEOUT_MS = 10_000
 // A socket is stale if it has not sent anything for this long. Clients send a
 // lightweight ping every 15s, so a live socket always has a fresh lastMessageAt.
 const STALE_SOCKET_MS = 30_000
+// Global flood budget: normal clients send hello + 2 key-exchanges + a ping
+// every 15s + ≤1 content item/s, far below this. A sustained flood above the
+// refill rate is abusive parse/CPU burn regardless of message kind.
+const MESSAGE_BURST = 20
+const MESSAGE_REFILL_PER_SECOND = 5
+// Hello/ping/ack/clear-history each have a floor interval so one socket cannot
+// flap peer-joined status, reflect pongs, or spam the peer with receipts.
+const HELLO_MIN_INTERVAL_MS = 1_000
+const PING_MIN_INTERVAL_MS = 1_000
+const CONTROL_WINDOW_MS = 500
+// Past this many garbage/rate-limit strikes the socket is closed instead of
+// warned: keeps one abusive connection from burning CPU forever.
+const MAX_VIOLATIONS = 10
+// Recently relayed clipboard ids, so a replayed (or double-sent) id is dropped
+// at the relay instead of making the peer burn an AES-GCM decrypt + ack.
+const MAX_SEEN_IDS = 200
 
 function blankAttachment(now = Date.now()): Attachment {
-  return { device: null, connectedAt: now, lastMessageAt: now, lastContentAt: 0, lastKeyExchangeAt: 0, keyExchangeTokens: KEY_EXCHANGE_BURST }
+  return {
+    device: null,
+    connectedAt: now,
+    lastMessageAt: now,
+    lastContentAt: 0,
+    lastKeyExchangeAt: 0,
+    keyExchangeTokens: KEY_EXCHANGE_BURST,
+    messageTokens: MESSAGE_BURST,
+    lastRefillAt: now,
+    lastHelloAt: 0,
+    lastPingAt: 0,
+    lastControlAt: 0,
+    violations: 0,
+  }
 }
 
 /** Pure helper, unit-tested: same-origin or missing origin passes. */
@@ -55,6 +92,7 @@ export function shouldAnnounceJoin(previousDevice: DeviceKind | null, nextDevice
 
 export class Room {
   private readonly peers = new Map<WebSocket, Attachment>()
+  private readonly seenClipboardIds = new Set<string>()
 
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {
     // Restore peer state after hibernation so connections survive the DO
@@ -102,56 +140,48 @@ export class Room {
       attachment = blankAttachment(0)
       this.peers.set(socket, attachment)
     }
+    const now = Date.now()
     // Every message counts as liveness, so the hello handler can tell a live
     // socket apart from a stale one.
-    attachment.lastMessageAt = Date.now()
+    attachment.lastMessageAt = now
+    // Global flood budget first, before JSON.parse burns CPU: refill then
+    // consume one token per message. Restored/hibernated attachments without a
+    // budget are treated as full.
+    const refilled = Math.min(
+      MESSAGE_BURST,
+      (attachment.messageTokens ?? MESSAGE_BURST) +
+        ((now - (attachment.lastRefillAt ?? now)) / RATE_WINDOW_MS) * MESSAGE_REFILL_PER_SECOND,
+    )
+    if (refilled < 1) {
+      this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
+      return
+    }
+    attachment.messageTokens = refilled - 1
+    attachment.lastRefillAt = now
     this.persist(socket, attachment)
     if (typeof raw !== 'string' || raw.length > MAX_SEALED_LENGTH + 512) {
-      this.sendError(socket, 'payload_too_large', 'This clipboard item is too large.')
+      this.noteViolation(socket, attachment, 'payload_too_large', 'This clipboard item is too large.')
       return
     }
     let parsed: unknown
     try {
       parsed = JSON.parse(raw)
     } catch {
-      this.sendError(socket, 'invalid_json', 'The room could not read that data. Try sharing again.')
+      this.noteViolation(socket, attachment, 'invalid_json', 'The room could not read that data. Try sharing again.')
       return
     }
     const message = parseClientMessage(parsed)
     if (!message) {
-      this.sendError(socket, 'invalid_message', 'The room did not understand that message. Try sharing again.')
+      this.noteViolation(socket, attachment, 'invalid_message', 'The room did not understand that message. Try sharing again.')
       return
     }
-    // Rate-limit only content messages (clipboard items); hello/ping are
-    // lightweight keepalives and must never be throttled.
-    if (message.type === 'clipboard-item') {
-      const now = Date.now()
-      if (now - attachment.lastContentAt < RATE_WINDOW_MS / MAX_RATE_PER_SECOND) {
-        this.sendError(socket, 'rate_limited', 'Too many messages. Slow down and try again.')
-        return
-      }
-      attachment.lastContentAt = now
-      this.persist(socket, attachment)
-    }
-    if (message.type === 'key-exchange') {
-      const now = Date.now()
-      // Token bucket: restores keyExchangeTokens per second, never above the
-      // burst capacity. Attachments restored from an older format have no
-      // token count, so treat them as full.
-      const tokens = Math.min(
-        KEY_EXCHANGE_BURST,
-        (attachment.keyExchangeTokens ?? KEY_EXCHANGE_BURST) + ((now - attachment.lastKeyExchangeAt) / RATE_WINDOW_MS) * KEY_EXCHANGE_REFILL_PER_SECOND,
-      )
-      if (tokens < 1) {
-        this.sendError(socket, 'rate_limited', 'Too many messages. Slow down and try again.')
-        return
-      }
-      attachment.keyExchangeTokens = tokens - 1
-      attachment.lastKeyExchangeAt = now
-      this.persist(socket, attachment)
-    }
     if (message.type === 'hello') {
-      const now = Date.now()
+      if (now - (attachment.lastHelloAt ?? 0) < HELLO_MIN_INTERVAL_MS) {
+        this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
+        return
+      }
+      attachment.lastHelloAt = now
+      this.persist(socket, attachment)
       const previousDevice = attachment.device
       // A live socket for this device may only be replaced by the same client
       // reconnecting (matching resume token). Anyone else holding the room
@@ -185,17 +215,48 @@ export class Room {
       return
     }
     if (message.type === 'ping') {
+      if (now - (attachment.lastPingAt ?? 0) < PING_MIN_INTERVAL_MS) {
+        this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
+        return
+      }
+      attachment.lastPingAt = now
+      this.persist(socket, attachment)
       socket.send(encode({ type: 'pong', timestamp: message.timestamp }))
       return
     }
     if (message.type === 'clipboard-item') {
+      if (now - (attachment.lastContentAt ?? 0) < RATE_WINDOW_MS / MAX_RATE_PER_SECOND) {
+        this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
+        return
+      }
+      attachment.lastContentAt = now
+      this.persist(socket, attachment)
       if (!attachment.device) {
         this.sendError(socket, 'not_ready', 'Identify this device before sharing text.')
         return
       }
+      if (this.seenClipboardIds.has(message.id)) {
+        this.noteViolation(socket, attachment, 'duplicate', 'This item was already shared.')
+        return
+      }
+      this.rememberClipboardId(message.id)
       this.broadcast({ ...message, type: 'clipboard-item', source: attachment.device }, socket)
     }
     if (message.type === 'key-exchange') {
+      // Token bucket: restores keyExchangeTokens per second, never above the
+      // burst capacity. Attachments restored from an older format have no
+      // token count, so treat them as full.
+      const tokens = Math.min(
+        KEY_EXCHANGE_BURST,
+        (attachment.keyExchangeTokens ?? KEY_EXCHANGE_BURST) + ((now - (attachment.lastKeyExchangeAt ?? 0)) / RATE_WINDOW_MS) * KEY_EXCHANGE_REFILL_PER_SECOND,
+      )
+      if (tokens < 1) {
+        this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
+        return
+      }
+      attachment.keyExchangeTokens = tokens - 1
+      attachment.lastKeyExchangeAt = now
+      this.persist(socket, attachment)
       // Gate on hello like clipboard items: unauthenticated sockets must not
       // be able to make the peer burn ECDH derives.
       if (!attachment.device) {
@@ -209,6 +270,14 @@ export class Room {
     if ((message.type === 'ack' || message.type === 'clear-history') && !attachment.device) {
       this.sendError(socket, 'not_ready', 'Identify this device before sending messages.')
       return
+    }
+    if (message.type === 'ack' || message.type === 'clear-history') {
+      if (now - (attachment.lastControlAt ?? 0) < CONTROL_WINDOW_MS) {
+        this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
+        return
+      }
+      attachment.lastControlAt = now
+      this.persist(socket, attachment)
     }
     if (message.type === 'ack') {
       this.broadcast({ type: 'ack', id: message.id }, socket)
@@ -269,6 +338,27 @@ export class Room {
 
   private persist(socket: WebSocket, attachment: Attachment): void {
     socket.serializeAttachment(attachment)
+  }
+
+  private rememberClipboardId(id: string): void {
+    if (this.seenClipboardIds.size >= MAX_SEEN_IDS) {
+      const oldest = this.seenClipboardIds.values().next().value
+      if (oldest !== undefined) this.seenClipboardIds.delete(oldest)
+    }
+    this.seenClipboardIds.add(id)
+  }
+
+  /** Warn then shed: garbage/flood strikes accumulate per socket so one abusive
+   * connection cannot burn relay CPU forever. not_ready/device_in_use are
+   * legitimate races and never count here. */
+  private noteViolation(socket: WebSocket, attachment: Attachment, code: string, message: string): void {
+    this.sendError(socket, code, message)
+    attachment.violations = (attachment.violations ?? 0) + 1
+    this.persist(socket, attachment)
+    if (attachment.violations >= MAX_VIOLATIONS) {
+      this.peers.delete(socket)
+      try { socket.close(1011, 'abuse') } catch { /* already closed */ }
+    }
   }
 
   private broadcast(message: Parameters<typeof encode>[0], except?: WebSocket): void {

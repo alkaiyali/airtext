@@ -54,11 +54,11 @@ describe('key-exchange rate limiting', () => {
     const phone = fakeSocket()
     await room.webSocketMessage(desktop as unknown as WebSocket, JSON.stringify({ type: 'hello', version: 1, device: 'desktop' }))
     await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'hello', version: 1, device: 'phone' }))
-    await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'key-exchange', id: 'offer', publicKey: 'p'.repeat(88), createdAt: 0 }))
+    await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'key-exchange', id: 'offer', publicKey: 'p'.repeat(88), createdAt: 1000000 }))
     // Half RTT back, an ECDH derive, half RTT out: well under the old 200ms
     // interval on any low-latency network.
     vi.advanceTimersByTime(40)
-    await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'key-exchange', id: 'confirm', publicKey: 'p'.repeat(88), confirm: 'c', createdAt: 40 }))
+    await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'key-exchange', id: 'confirm', publicKey: 'p'.repeat(88), confirm: 'c', createdAt: 1000040 }))
 
     const forwarded = wire(desktop).filter((type) => type === 'key-exchange')
     expect(forwarded).toHaveLength(2)
@@ -74,7 +74,7 @@ describe('key-exchange rate limiting', () => {
     await room.webSocketMessage(desktop as unknown as WebSocket, JSON.stringify({ type: 'hello', version: 1, device: 'desktop' }))
     await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'hello', version: 1, device: 'phone' }))
     for (let i = 0; i < 10; i += 1) {
-      await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'key-exchange', id: `k${i}`, publicKey: 'p'.repeat(88), createdAt: i }))
+      await room.webSocketMessage(phone as unknown as WebSocket, JSON.stringify({ type: 'key-exchange', id: `k${i}`, publicKey: 'p'.repeat(88), createdAt: 1000000 + i }))
     }
 
     const forwarded = wire(desktop).filter((type) => type === 'key-exchange')
@@ -192,5 +192,77 @@ describe('alarms', () => {
     await room.webSocketClose(desktop as unknown as WebSocket)
     expect(alarms).toHaveLength(1)
     expect(alarms[0] - Date.now()).toBeGreaterThan(29 * 60 * 1000)
+  })
+})
+
+describe('anti-abuse', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('drops replayed clipboard ids at the relay', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const room = new Room(fakeState(), {} as never)
+    const desktop = fakeSocket()
+    const phone = fakeSocket()
+    await say(room, desktop, { type: 'hello', version: 1, device: 'desktop' })
+    await say(room, phone, { type: 'hello', version: 1, device: 'phone' })
+    await say(room, desktop, { type: 'clipboard-item', id: 'dup', sealed: 'a.b', createdAt: 1000000 })
+    vi.advanceTimersByTime(1_100)
+    await say(room, desktop, { type: 'clipboard-item', id: 'dup', sealed: 'a.b', createdAt: 1001100 })
+
+    expect(wire(phone).filter((type) => type === 'clipboard-item')).toHaveLength(1)
+    expect(errors(desktop).some((message) => message.code === 'duplicate')).toBe(true)
+  })
+
+  it('throttles ping floods without breaking the 15s keepalive', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const room = new Room(fakeState(), {} as never)
+    const desktop = fakeSocket()
+    await say(room, desktop, { type: 'hello', version: 1, device: 'desktop' })
+    await say(room, desktop, { type: 'ping', timestamp: 1000000 })
+    expect(wire(desktop)).toContain('pong')
+    await say(room, desktop, { type: 'ping', timestamp: 1000000 })
+    expect(errors(desktop).some((message) => message.code === 'rate_limited')).toBe(true)
+    vi.advanceTimersByTime(15_000)
+    await say(room, desktop, { type: 'ping', timestamp: 1015000 })
+    expect(wire(desktop).filter((type) => type === 'pong')).toHaveLength(2)
+  })
+
+  it('throttles hello flaps so status cannot flap', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const room = new Room(fakeState(), {} as never)
+    const desktop = fakeSocket()
+    await say(room, desktop, { type: 'hello', version: 1, device: 'desktop' })
+    await say(room, desktop, { type: 'hello', version: 1, device: 'desktop' })
+    expect(errors(desktop).some((message) => message.code === 'rate_limited')).toBe(true)
+  })
+
+  it('throttles ack/clear-history spam toward the peer', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const room = new Room(fakeState(), {} as never)
+    const desktop = fakeSocket()
+    const phone = fakeSocket()
+    await say(room, desktop, { type: 'hello', version: 1, device: 'desktop' })
+    await say(room, phone, { type: 'hello', version: 1, device: 'phone' })
+    await say(room, phone, { type: 'ack', id: 'a1' })
+    await say(room, phone, { type: 'ack', id: 'a2' })
+    expect(wire(desktop).filter((type) => type === 'ack')).toHaveLength(1)
+    expect(errors(phone).some((message) => message.code === 'rate_limited')).toBe(true)
+  })
+
+  it('sheds sockets past the violation cap instead of warning forever', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const room = new Room(fakeState(), {} as never)
+    const phone = fakeSocket()
+    for (let i = 0; i < 35; i += 1) {
+      await room.webSocketMessage(phone as unknown as WebSocket, '{oops')
+    }
+    expect(phone.closedWith).toBe('abuse')
   })
 })

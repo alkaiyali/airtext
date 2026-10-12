@@ -62,12 +62,12 @@ function clientKey(request: Request): string {
   return ip ? limiterKey(ip) : ''
 }
 
-async function enforceIpLimit(request: Request, env: Env): Promise<boolean> {
+async function consumeAttempt(request: Request, env: Env): Promise<boolean> {
   const ip = clientKey(request)
   if (!ip || !env.LIMITER) return true
   try {
     const limiterId = env.LIMITER.idFromName(ip)
-    const response = await env.LIMITER.get(limiterId).fetch('https://limiter/limit', {
+    const response = await env.LIMITER.get(limiterId).fetch('https://limiter/consume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ip }),
@@ -79,21 +79,10 @@ async function enforceIpLimit(request: Request, env: Env): Promise<boolean> {
   }
 }
 
-async function markSuccess(request: Request, env: Env): Promise<void> {
-  const ip = clientKey(request)
-  if (!ip || !env.LIMITER) return
-  const limiterId = env.LIMITER.idFromName(ip)
-  await env.LIMITER.get(limiterId).fetch('https://limiter/success', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ip }),
-  })
-}
-
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     try {
-      return await handleFetch(request, env, ctx)
+      return await handleFetch(request, env)
     } catch (error) {
       // Details go to the Worker logs, never to the client.
       console.error('airtext error', error)
@@ -102,27 +91,23 @@ export default {
   },
 }
 
-async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function handleFetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const roomMatch = url.pathname.match(/^\/room\/([A-Z0-9]{8})$/i)
   if (roomMatch) {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return withSecurityHeaders(new Response('WebSocket upgrade required', { status: 426 }), request.url)
     }
-    const allowed = await enforceIpLimit(request, env)
+    // Atomic consume counts every upgrade attempt up front (including ones the
+    // room later rejects as full): parallel joins cannot race a stale check,
+    // and probing full rooms is no longer free.
+    const allowed = await consumeAttempt(request, env)
     if (!allowed) {
-      return withSecurityHeaders(new Response('Too many rooms from this network. Try again later.', { status: 429, headers: { 'Retry-After': '3600' } }), request.url)
+      return withSecurityHeaders(new Response('Too many rooms from this network. Try again later.', { status: 429, headers: { 'Retry-After': '3600', 'Cache-Control': 'no-store' } }), request.url)
     }
     const roomId = env.ROOMS.idFromName(roomMatch[1].toUpperCase())
     try {
-      const upgrade = await env.ROOMS.get(roomId).fetch(request)
-      // Count a successful join without blocking the upgrade. waitUntil keeps
-      // the Worker alive until the count lands; a bare promise can be
-      // cancelled once the response is returned, silently disabling the limit.
-      if (upgrade.status === 101) {
-        ctx.waitUntil(markSuccess(request, env).catch(() => undefined))
-      }
-      return upgrade
+      return await env.ROOMS.get(roomId).fetch(request)
     } catch (error) {
       console.error('airtext room error', error)
       return withSecurityHeaders(new Response('Could not open the room. Try again in a moment.', { status: 500 }), request.url)

@@ -16,6 +16,23 @@ describe('worker protocol', () => {
     expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', confirm: 'def', createdAt: 1 })).not.toBeNull()
   })
 
+  it('rejects empty ids and non-finite timestamps', () => {
+    expect(parseClientMessage({ type: 'clipboard-item', id: '', sealed: 'abc.def', createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: '', publicKey: 'abc', createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'ack', id: '' })).toBeNull()
+    expect(parseClientMessage({ type: 'clipboard-item', id: '1', sealed: 'abc.def', createdAt: NaN })).toBeNull()
+    expect(parseClientMessage({ type: 'clipboard-item', id: '1', sealed: 'abc.def', createdAt: Infinity })).toBeNull()
+    expect(parseClientMessage({ type: 'clipboard-item', id: '1', sealed: 'abc.def', createdAt: -5 })).toBeNull()
+    expect(parseClientMessage({ type: 'clipboard-item', id: '1', sealed: 'abc.def', createdAt: 1.5 })).toBeNull()
+    expect(parseClientMessage({ type: 'ping', timestamp: NaN })).toBeNull()
+  })
+
+  it('rejects non-base64url keys and empty confirmations', () => {
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'not valid!!!', createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', confirm: '', createdAt: 1 })).toBeNull()
+    expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: 'abc', confirm: 'bad!!!', createdAt: 1 })).toBeNull()
+  })
+
   it('rejects malformed key-exchange messages', () => {
     expect(parseClientMessage({ type: 'key-exchange', id: 'k1', createdAt: 1 })).toBeNull()
     expect(parseClientMessage({ type: 'key-exchange', id: 'k1', publicKey: '', createdAt: 1 })).toBeNull()
@@ -34,7 +51,6 @@ describe('worker protocol', () => {
     expect(parseClientMessage({ type: 'clear-history' })).toBeNull()
     expect(parseClientMessage({ type: 'clear-history', sealed: 'x'.repeat(513) })).toBeNull()
     expect(parseClientMessage({ type: 'ack', id: 'item-1' })).not.toBeNull()
-    expect(parseClientMessage({ type: 'ack', id: '' })).not.toBeNull()
     expect(parseClientMessage({ type: 'ack', id: 'x'.repeat(81) })).toBeNull()
   })
 

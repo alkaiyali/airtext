@@ -35,6 +35,21 @@ const MAX_SEALED_LENGTH = 900_000
 export const MAX_RESUME_LENGTH = 64
 // A sealed clear-history control (id + timestamp) is well under 200 chars.
 export const MAX_SEALED_CONTROL_LENGTH = 512
+export const MAX_ID_LENGTH = 80
+// Greatest date representable as a JS timestamp (8.64e15). createdAt must be a
+// finite integer in (0, MAX_TIMESTAMP] so relays never forward NaN/Infinity,
+// negative sort poison, or far-future timestamps that pin history ordering.
+export const MAX_TIMESTAMP = 8_640_000_000_000_000
+
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/
+
+function isValidId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_ID_LENGTH
+}
+
+function isValidTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value > 0 && value <= MAX_TIMESTAMP
+}
 
 export function parseClientMessage(value: unknown): ClientMessage | null {
   if (!value || typeof value !== 'object') return null
@@ -50,30 +65,32 @@ export function parseClientMessage(value: unknown): ClientMessage | null {
   }
   if (
     message.type === 'clipboard-item' &&
-    typeof message.id === 'string' &&
-    message.id.length <= 80 &&
+    isValidId(message.id) &&
     typeof message.sealed === 'string' &&
     message.sealed.length > 0 &&
     message.sealed.length <= MAX_SEALED_LENGTH &&
-    typeof message.createdAt === 'number'
+    isValidTimestamp(message.createdAt)
   ) {
     return message as ClientMessage
   }
   if (
     message.type === 'key-exchange' &&
-    typeof message.id === 'string' &&
-    message.id.length <= 80 &&
+    isValidId(message.id) &&
     typeof message.publicKey === 'string' &&
     message.publicKey.length > 0 &&
     message.publicKey.length <= MAX_PUBKEY_LENGTH &&
+    BASE64URL_RE.test(message.publicKey) &&
     (message.confirm === undefined ||
-      (typeof message.confirm === 'string' && message.confirm.length <= MAX_CONFIRM_LENGTH)) &&
-    typeof message.createdAt === 'number'
+      (typeof message.confirm === 'string' &&
+        message.confirm.length > 0 &&
+        message.confirm.length <= MAX_CONFIRM_LENGTH &&
+        BASE64URL_RE.test(message.confirm))) &&
+    isValidTimestamp(message.createdAt)
   ) {
     return message as ClientMessage
   }
-  if (message.type === 'ping' && typeof message.timestamp === 'number') return message as ClientMessage
-  if (message.type === 'ack' && typeof message.id === 'string' && message.id.length <= 80) return message as ClientMessage
+  if (message.type === 'ping' && isValidTimestamp(message.timestamp)) return message as ClientMessage
+  if (message.type === 'ack' && isValidId(message.id)) return message as ClientMessage
   if (
     message.type === 'clear-history' &&
     typeof message.sealed === 'string' &&
