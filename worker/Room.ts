@@ -1,7 +1,8 @@
-import { encode, MAX_SEALED_LENGTH, parseClientMessage, type DeviceKind } from './protocol'
+import { encode, LIMIT_KEY_HEADER, MAX_SEALED_LENGTH, parseClientMessage, type DeviceKind } from './protocol'
 
 interface Env {
   ROOMS: DurableObjectNamespace
+  LIMITER?: DurableObjectNamespace
 }
 
 interface Attachment {
@@ -11,6 +12,7 @@ interface Attachment {
   connectedAt: number
   lastMessageAt: number
   lastContentAt: number
+  contentTokens: number
   lastKeyExchangeAt: number
   keyExchangeTokens: number
   /** Global per-socket flood budget covering every message kind. */
@@ -24,8 +26,11 @@ interface Attachment {
 }
 
 const ROOM_TTL_MS = 30 * 60 * 1000
-const MAX_RATE_PER_SECOND = 1
 const RATE_WINDOW_MS = 1_000
+// Clipboard items: a short burst (pasting two or three things in a row) then
+// one per second sustained. Each item makes the peer burn an AES-GCM decrypt.
+const CONTENT_BURST = 3
+const CONTENT_REFILL_PER_SECOND = 1
 // The handshake sends two key-exchanges back-to-back (the offer, then the
 // confirmation one round-trip later), so a flat interval drops the confirm on
 // low-latency networks. Allow a small burst instead, refilling slowly: each
@@ -64,6 +69,7 @@ function blankAttachment(now = Date.now()): Attachment {
     connectedAt: now,
     lastMessageAt: now,
     lastContentAt: 0,
+    contentTokens: CONTENT_BURST,
     lastKeyExchangeAt: 0,
     keyExchangeTokens: KEY_EXCHANGE_BURST,
     messageTokens: MESSAGE_BURST,
@@ -90,9 +96,18 @@ export function shouldAnnounceJoin(previousDevice: DeviceKind | null, nextDevice
   return previousDevice !== nextDevice
 }
 
+/** Pure helper, unit-tested: copy for a refused room creation. */
+export function roomLimitMessage(retryAfterSeconds: number): string {
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60))
+  return `Too many new rooms from this network right now. Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.`
+}
+
 export class Room {
   private readonly peers = new Map<WebSocket, Attachment>()
   private readonly seenClipboardIds = new Set<string>()
+  /** Set once this room has been counted against its creator's network. */
+  private created = false
+  private creation: Promise<number> | null = null
 
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {
     // Restore peer state after hibernation so connections survive the DO
@@ -101,6 +116,7 @@ export class Room {
       const attachment = socket.deserializeAttachment() as Attachment | null
       this.peers.set(socket, attachment ?? blankAttachment(0))
     }
+    if (this.peers.size > 0) this.created = true
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -112,8 +128,11 @@ export class Room {
       return new Response('Origin rejected', { status: 403 })
     }
     if (this.peers.size >= MAX_SOCKETS) {
-      return new Response('Room is full. Close the other tab and try again.', { status: 429 })
+      // Transient during reconnect overlap: the client shows this and retries.
+      return refuse(1013, 'room_full', 'This room is busy. Close any other airtext tabs and try again.')
     }
+    const retryAfter = await this.admit(request.headers.get(LIMIT_KEY_HEADER) ?? '')
+    if (retryAfter > 0) return refuse(4429, 'room_limit', roomLimitMessage(retryAfter))
 
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket]
@@ -132,6 +151,46 @@ export class Room {
     server.send(encode({ type: 'hello', version: 1, peers: peerCount }))
 
     return new Response(null, { status: 101, webSocket: client })
+  }
+
+  /** The first upgrade into a room creates it and is counted against the
+   * caller's network; joins and reconnects to an existing room are free.
+   * Returns 0 when admitted, else seconds until the network may create again. */
+  async admit(limitKey: string): Promise<number> {
+    if (this.created) return 0
+    // Memoized so parallel first upgrades share one claim instead of each
+    // consuming a token.
+    this.creation ??= this.claimCreation(limitKey)
+    const retryAfter = await this.creation
+    if (retryAfter > 0) this.creation = null
+    return retryAfter
+  }
+
+  private async claimCreation(limitKey: string): Promise<number> {
+    const existing = await this.state.storage.get<boolean>('created').catch(() => undefined)
+    if (!existing) {
+      const retryAfter = await this.consumeCreation(limitKey)
+      if (retryAfter > 0) return retryAfter
+      await this.state.storage.put('created', true).catch(() => undefined)
+    }
+    this.created = true
+    return 0
+  }
+
+  private async consumeCreation(limitKey: string): Promise<number> {
+    if (!limitKey || !this.env.LIMITER) return 0
+    try {
+      const limiter = this.env.LIMITER.get(this.env.LIMITER.idFromName(limitKey))
+      const response = await limiter.fetch('https://limiter/consume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: limitKey }),
+      })
+      if (response.status !== 429) return 0
+      return Math.max(1, Number(response.headers.get('Retry-After')) || 60)
+    } catch {
+      return 0 // never block the room on a limiter failure
+    }
   }
 
   async webSocketMessage(socket: WebSocket, raw: string | ArrayBuffer): Promise<void> {
@@ -225,10 +284,16 @@ export class Room {
       return
     }
     if (message.type === 'clipboard-item') {
-      if (now - (attachment.lastContentAt ?? 0) < RATE_WINDOW_MS / MAX_RATE_PER_SECOND) {
+      // Token bucket like key-exchange; older attachments count as full.
+      const contentTokens = Math.min(
+        CONTENT_BURST,
+        (attachment.contentTokens ?? CONTENT_BURST) + ((now - (attachment.lastContentAt ?? 0)) / RATE_WINDOW_MS) * CONTENT_REFILL_PER_SECOND,
+      )
+      if (contentTokens < 1) {
         this.noteViolation(socket, attachment, 'rate_limited', 'Too many messages. Slow down and try again.')
         return
       }
+      attachment.contentTokens = contentTokens - 1
       attachment.lastContentAt = now
       this.persist(socket, attachment)
       if (!attachment.device) {
@@ -315,6 +380,10 @@ export class Room {
       }
     }
     if (this.peers.size === 0) {
+      // The room is gone: a later upgrade with this code creates (and is
+      // counted as) a new room.
+      this.created = false
+      this.creation = null
       await this.state.storage.deleteAll()
       return
     }
@@ -386,6 +455,17 @@ export class Room {
       await this.state.storage.setAlarm(Date.now() + inMs)
     } catch { /* alarms unavailable in tests */ }
   }
+}
+
+/** Accept just long enough to explain why, then close: browsers hide the HTTP
+ * status of a failed upgrade, so a plain 429 reads as "can't connect". */
+function refuse(closeCode: number, code: string, message: string): Response {
+  const pair = new WebSocketPair()
+  const [client, server] = Object.values(pair) as [WebSocket, WebSocket]
+  server.accept()
+  server.send(encode({ type: 'error', code, message }))
+  server.close(closeCode, code)
+  return new Response(null, { status: 101, webSocket: client })
 }
 
 export default Room

@@ -1,5 +1,6 @@
 import Room from './Room'
 import Limiter from './Limiter'
+import { LIMIT_KEY_HEADER } from './protocol'
 
 interface Env {
   ASSETS: Fetcher
@@ -62,23 +63,6 @@ function clientKey(request: Request): string {
   return ip ? limiterKey(ip) : ''
 }
 
-async function consumeAttempt(request: Request, env: Env): Promise<boolean> {
-  const ip = clientKey(request)
-  if (!ip || !env.LIMITER) return true
-  try {
-    const limiterId = env.LIMITER.idFromName(ip)
-    const response = await env.LIMITER.get(limiterId).fetch('https://limiter/consume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip }),
-    })
-    if (response.status === 429) return false
-    return true
-  } catch {
-    return true // never block the room on a limiter failure
-  }
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -98,16 +82,16 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return withSecurityHeaders(new Response('WebSocket upgrade required', { status: 426 }), request.url)
     }
-    // Atomic consume counts every upgrade attempt up front (including ones the
-    // room later rejects as full): parallel joins cannot race a stale check,
-    // and probing full rooms is no longer free.
-    const allowed = await consumeAttempt(request, env)
-    if (!allowed) {
-      return withSecurityHeaders(new Response('Too many rooms from this network. Try again later.', { status: 429, headers: { 'Retry-After': '3600', 'Cache-Control': 'no-store' } }), request.url)
-    }
+    // The room decides whether this upgrade creates it (counted against the
+    // network) or joins/reconnects to it (free), so it needs the network key.
+    // Set it here, overwriting anything the client sent: the Room is only
+    // reachable through this Worker.
+    const headers = new Headers(request.headers)
+    headers.set(LIMIT_KEY_HEADER, clientKey(request))
+    const forwarded = new Request(request, { headers })
     const roomId = env.ROOMS.idFromName(roomMatch[1].toUpperCase())
     try {
-      return await env.ROOMS.get(roomId).fetch(request)
+      return await env.ROOMS.get(roomId).fetch(forwarded)
     } catch (error) {
       console.error('airtext room error', error)
       return withSecurityHeaders(new Response('Could not open the room. Try again in a moment.', { status: 500 }), request.url)

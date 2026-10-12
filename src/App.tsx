@@ -111,6 +111,8 @@ function App() {
   const [roomCode, setRoomCode] = useState('')
   const [status, setStatus] = useState<RoomStatus>('idle')
   const [statusMessage, setStatusMessage] = useState('')
+  // Per-item relay feedback (throttled, too large) shown in the composer.
+  const [notice, setNotice] = useState('')
   const [history, setHistory] = useState<ClipboardEntry[]>([])
   // True only after this session emptied the trail on purpose, so the empty
   // state can say "cleared" instead of "nothing ever happened here".
@@ -176,6 +178,8 @@ function App() {
         setStatus(event.status)
         setStatusMessage(event.message ?? '')
         if (event.status === 'connected') setPeerRoom(parsed)
+      } else if (event.type === 'notice') {
+        setNotice(event.message)
       } else if (event.type === 'decrypted') {
         const payload = event.payload
         if (!payload || typeof payload.text !== 'string') return
@@ -275,6 +279,7 @@ function App() {
     const activeClient = clientRef.current
     if (!activeClient || status !== 'connected') throw new Error('Not connected yet. Keep this tab open while the room reconnects, then try again.')
     if (!secure) throw new Error('The secure channel is still getting ready — try again in a moment.')
+    setNotice('')
     const entry = createEntry(text, 'this device', image)
     setHistory(await saveEntry(entry, roomCodeRef.current))
     setHistoryCleared(false)
@@ -301,7 +306,7 @@ function App() {
   function workspace(): React.JSX.Element {
     const canShare = status === 'connected' && secure
     const peerHere = status === 'connected'
-    return <main className="workspace-shell"><header className="workspace-header"><div><p className="eyebrow">Your room <span className="room-code-inline">{roomCode.slice(0, 4)} {roomCode.slice(4)}</span></p><h1 ref={workspaceHeadingRef} tabIndex={-1}>Clipboard, in sync.</h1></div><div className="workspace-actions"><ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />{themeButton()}<button className="secondary-button" type="button" onClick={reset}>Leave room</button></div></header><div className="workspace-grid"><div className="workspace-main"><ClipboardComposer onShare={share} canShare={canShare} /><ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} /></div><aside className="workspace-rail"><div className="rail-card"><span className="rail-kicker">Connected device</span><div className="device-line"><span className="device-orb" aria-hidden="true">{device === 'desktop' ? <PhoneIcon size={20} /> : <ComputerIcon size={20} />}</span><div><strong>{device === 'desktop' ? 'Phone' : 'Computer'}</strong><small>{peerHere ? (secure ? 'Secure channel ready' : 'Setting up secure channel…') : 'Not in the room right now'}</small></div><span className={peerHere ? 'online-dot' : 'online-dot is-offline'} aria-label={peerHere ? 'The other device is connected' : 'The other device is not connected'} /></div><p>Share from either device — new items appear at the top of both histories.</p></div>{matchCode ? <div className="rail-card"><span className="rail-kicker">Match check</span><div className="code-row"><strong>{matchCode}</strong></div><p>{secure ? 'Same on both screens? Then no one is in the middle.' : 'Compare this with the other screen once it connects. They should match.'}</p></div> : null}<div className="rail-note"><span aria-hidden="true"><RingIcon /></span><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></div><label className="auto-copy-toggle"><input type="checkbox" checked={autoCopy} onChange={toggleAutoCopy} /><span>Auto-copy new items to this device&rsquo;s clipboard</span></label></aside></div></main>
+    return <main className="workspace-shell"><header className="workspace-header"><div><p className="eyebrow">Your room <span className="room-code-inline">{roomCode.slice(0, 4)} {roomCode.slice(4)}</span></p><h1 ref={workspaceHeadingRef} tabIndex={-1}>Clipboard, in sync.</h1></div><div className="workspace-actions"><ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />{themeButton()}<button className="secondary-button" type="button" onClick={reset}>Leave room</button></div></header><div className="workspace-grid"><div className="workspace-main"><ClipboardComposer onShare={share} canShare={canShare} notice={notice} /><ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} /></div><aside className="workspace-rail"><div className="rail-card"><span className="rail-kicker">Connected device</span><div className="device-line"><span className="device-orb" aria-hidden="true">{device === 'desktop' ? <PhoneIcon size={20} /> : <ComputerIcon size={20} />}</span><div><strong>{device === 'desktop' ? 'Phone' : 'Computer'}</strong><small>{peerHere ? (secure ? 'Secure channel ready' : 'Setting up secure channel…') : 'Not in the room right now'}</small></div><span className={peerHere ? 'online-dot' : 'online-dot is-offline'} aria-label={peerHere ? 'The other device is connected' : 'The other device is not connected'} /></div><p>Share from either device — new items appear at the top of both histories.</p></div>{matchCode ? <div className="rail-card"><span className="rail-kicker">Match check</span><div className="code-row"><strong>{matchCode}</strong></div><p>{secure ? 'Same on both screens? Then no one is in the middle.' : 'Compare this with the other screen once it connects. They should match.'}</p></div> : null}<div className="rail-note"><span aria-hidden="true"><RingIcon /></span><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></div><label className="auto-copy-toggle"><input type="checkbox" checked={autoCopy} onChange={toggleAutoCopy} /><span>Auto-copy new items to this device&rsquo;s clipboard</span></label></aside></div></main>
   }
 
   // Desktop shows the QR pairing screen until actually connected; the phone
@@ -327,7 +332,7 @@ function App() {
   // The wordmark is not a control: it used to be an <a> that silently reset the
   // room. Leaving is explicit (back button / Leave room), so the brand stays
   // inert instead of hiding a destructive action behind a navigation affordance.
-  return <main className="app-shell"><header className="app-header"><span className="wordmark">airtext<span aria-hidden="true">·</span></span><div className="app-header-actions"><span className="header-note">A tiny bridge between screens</span>{themeButton()}</div></header><Suspense fallback={<p className="lede">Loading…</p>}>{device === null ? <ModeChooser preferred={preferred} onChoose={(next) => { if (next === 'desktop') startHosting(); else setDevice(next) }} /> : device === 'desktop' ? <HostPairing code={hostCode} status={status} onRetry={retry} onReset={reset} /> : <JoinScanner status={status} initialCode={initialInvite} errorMessage={statusMessage} onRetry={retry} onConnect={(code) => connect(code, 'phone')} onReset={reset} />}</Suspense>{device !== null && !showWorkspace ? <button className="back-button" type="button" onClick={reset}><ArrowLeftIcon /> Choose another device</button> : null}</main>
+  return <main className="app-shell"><header className="app-header"><span className="wordmark">airtext<span aria-hidden="true">·</span></span><div className="app-header-actions"><span className="header-note">A tiny bridge between screens</span>{themeButton()}</div></header><Suspense fallback={<p className="lede">Loading…</p>}>{device === null ? <ModeChooser preferred={preferred} onChoose={(next) => { if (next === 'desktop') startHosting(); else setDevice(next) }} /> : device === 'desktop' ? <HostPairing code={hostCode} status={status} errorMessage={statusMessage} onRetry={retry} onReset={reset} /> : <JoinScanner status={status} initialCode={initialInvite} errorMessage={statusMessage} onRetry={retry} onConnect={(code) => connect(code, 'phone')} onReset={reset} />}</Suspense>{device !== null && !showWorkspace ? <button className="back-button" type="button" onClick={reset}><ArrowLeftIcon /> Choose another device</button> : null}</main>
 }
 
 export default App

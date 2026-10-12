@@ -21,7 +21,7 @@ A small clipboard bridge between a computer and a phone. Open the app on the com
 - Clipboard text is sealed on-device with AES-GCM under ephemeral ECDH (P-256) session keys before relay, forwarded to the other live browser, and never persisted by the Worker. The room code is only the rendezvous name — it cannot decrypt anything, and keys are discarded when you leave (forward secrecy). The relay still sees metadata (timing, size, IPs): treat rooms as private, not anonymous.
 - Each screen shows a **match check** code once the secure channel is up. If both screens show the same code, no one is sitting in the middle; if they differ, leave the room and start over.
 - Text entries are capped at 100,000 characters, images are auto-compressed under 350 KB, and each local history is capped at 100 entries per room.
-- Room creation is rate-limited per network (60/hour); clipboard relay is rate-limited to 1 message/second per device.
+- New rooms are rate-limited per network: a burst of 30, then one more per minute. Joining or reconnecting to an existing room is never counted. Clipboard items are limited to a burst of 3, then 1 per second per device; throttled items are resent automatically.
 - Camera and clipboard permissions are controlled by the browser. HTTPS is required by modern browsers for those APIs.
 
 ## Architecture

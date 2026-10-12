@@ -1,21 +1,23 @@
-import { describe, expect, it } from 'vitest'
-import { Limiter, MAX_PER_IP_PER_HOUR, WINDOW_MS } from './Limiter'
+import { describe, expect, it, vi } from 'vitest'
+import { Limiter, ROOM_BURST, ROOM_REFILL_MS, refillTokens } from './Limiter'
 
 function fakeLimiterState() {
   const store = new Map<string, unknown>()
-  const deleted: string[] = []
+  const alarms: number[] = []
   return {
     store,
-    deleted,
+    alarms,
     state: {
       storage: {
         get: async (key: string) => store.get(key),
         put: async (key: string, value: unknown) => {
           store.set(key, value)
         },
-        delete: async (key: string) => {
-          deleted.push(key)
-          store.delete(key)
+        setAlarm: async (at: number) => {
+          alarms.push(at)
+        },
+        deleteAll: async () => {
+          store.clear()
         },
       },
     } as unknown as DurableObjectState,
@@ -30,38 +32,51 @@ function post(path: string, body: unknown): Request {
   })
 }
 
+const consume = (limiter: Limiter) => limiter.fetch(post('/consume', { ip: '203.0.113.7' }))
+
 describe('Limiter /consume', () => {
-  it('allows attempts up to the cap, then rejects with Retry-After and no-store', async () => {
-    const { state } = fakeLimiterState()
-    const limiter = new Limiter(state)
-    for (let i = 0; i < MAX_PER_IP_PER_HOUR; i += 1) {
-      const response = await limiter.fetch(post('/consume', { ip: '203.0.113.7' }))
-      expect(response.status).toBe(200)
+  it('allows a full burst, then rejects with a short Retry-After and no-store', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const limiter = new Limiter(fakeLimiterState().state)
+    for (let i = 0; i < ROOM_BURST; i += 1) {
+      expect((await consume(limiter)).status).toBe(200)
     }
-    const limited = await limiter.fetch(post('/consume', { ip: '203.0.113.7' }))
+    const limited = await consume(limiter)
     expect(limited.status).toBe(429)
-    expect(limited.headers.get('Retry-After')).toBe('3600')
+    expect(limited.headers.get('Retry-After')).toBe(String(ROOM_REFILL_MS / 1000))
     expect(limited.headers.get('Cache-Control')).toBe('no-store')
+    vi.useRealTimers()
   })
 
-  it('counts every attempt atomically, so parallel joins cannot race a stale check', async () => {
-    const { state, store } = fakeLimiterState()
-    const limiter = new Limiter(state)
-    await limiter.fetch(post('/consume', { ip: '203.0.113.7' }))
-    await limiter.fetch(post('/consume', { ip: '203.0.113.7' }))
-    expect((store.get('ip:203.0.113.7') as { count: number }).count).toBe(2)
+  it('recovers gradually instead of locking the network out for an hour', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const limiter = new Limiter(fakeLimiterState().state)
+    for (let i = 0; i < ROOM_BURST; i += 1) await consume(limiter)
+    expect((await consume(limiter)).status).toBe(429)
+    vi.advanceTimersByTime(ROOM_REFILL_MS)
+    expect((await consume(limiter)).status).toBe(200)
+    expect((await consume(limiter)).status).toBe(429)
+    vi.useRealTimers()
   })
 
-  it('starts fresh once the window expires, even from a full bucket', async () => {
-    const { state } = fakeLimiterState()
+  it('schedules deletion of the address for when the bucket is full again', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const { state, store, alarms } = fakeLimiterState()
     const limiter = new Limiter(state)
-    // Seed a full, expired window directly in storage.
-    await state.storage.put('ip:203.0.113.7', {
-      count: MAX_PER_IP_PER_HOUR,
-      windowStart: Date.now() - WINDOW_MS - 1_000,
-    })
-    const response = await limiter.fetch(post('/consume', { ip: '203.0.113.7' }))
-    expect(response.status).toBe(200)
+    await consume(limiter)
+    expect(alarms.at(-1)).toBe(1_000_000 + ROOM_REFILL_MS)
+    await limiter.alarm()
+    expect(store.size).toBe(0)
+    vi.useRealTimers()
+  })
+
+  it('treats records from the old fixed-window format as a full bucket', () => {
+    expect(refillTokens({ count: 60, windowStart: 0 } as never, Date.now())).toBe(ROOM_BURST)
+    expect(refillTokens(undefined, Date.now())).toBe(ROOM_BURST)
+    expect(refillTokens({ tokens: 0, updatedAt: 0 }, ROOM_REFILL_MS / 2)).toBe(0.5)
   })
 
   it('rejects malformed ips instead of storing them', async () => {
@@ -74,11 +89,8 @@ describe('Limiter /consume', () => {
     expect(store.size).toBe(0)
   })
 
-  it('keeps the legacy limit/success paths working', async () => {
-    const { state } = fakeLimiterState()
-    const limiter = new Limiter(state)
-    expect((await limiter.fetch(post('/limit', { ip: '203.0.113.7' }))).status).toBe(200)
-    expect((await limiter.fetch(post('/success', { ip: '203.0.113.7' }))).status).toBe(200)
-    expect((await limiter.fetch(post('/limit', { ip: '203.0.113.7' }))).status).toBe(200)
+  it('rejects unknown paths', async () => {
+    const limiter = new Limiter(fakeLimiterState().state)
+    expect((await limiter.fetch(post('/limit', { ip: '203.0.113.7' }))).status).toBe(404)
   })
 })

@@ -7,21 +7,24 @@ import { CheckIcon, CopyIcon } from './icons'
 interface HostPairingProps {
   code: string
   status: RoomStatus
+  /** The relay's or client's explanation when the room could not be opened. */
+  errorMessage?: string
   onRetry: () => void
   onReset: () => void
 }
 
-function waitCopy(status: RoomStatus): string {
+function waitCopy(status: RoomStatus, errorMessage: string): string {
   if (status === 'waiting') {
     return 'Scan the QR code with your phone’s camera, or type the code above. Keep this tab open.'
   }
+  if (status === 'error' && errorMessage) return errorMessage
   if (status === 'error' || status === 'disconnected') {
     return 'Couldn’t reach the room. Check your connection, then Retry — or Start over with a new room.'
   }
   return 'Opening the room…'
 }
 
-export function HostPairing({ code, status, onRetry, onReset }: HostPairingProps) {
+export function HostPairing({ code, status, errorMessage = '', onRetry, onReset }: HostPairingProps) {
   const [qrData, setQrData] = useState('')
   const [qrError, setQrError] = useState('')
   const [copied, setCopied] = useState(false)
@@ -62,10 +65,11 @@ export function HostPairing({ code, status, onRetry, onReset }: HostPairingProps
         <ConnectionStatus status={status} device="desktop" onRetry={onRetry} onReset={onReset} />
         <p className="eyebrow">Computer host</p>
         <h1 id="host-title">Scan this code from your phone.</h1>
-        <p className="lede">Keep this tab open. Your phone joins this room by scanning the code, and everything you share appears on both screens.</p>
+        <p className="lede">Keep this tab open while you pair. No app needed on the phone: its camera opens airtext straight into this room.</p>
         <div className="steps" role="list" aria-label="Pairing steps">
           <div className="step" role="listitem"><span aria-hidden="true">01</span><p><strong>Scan this screen</strong><small>On your phone, open the camera and scan the QR code.</small></p></div>
-          <div className="step" role="listitem"><span aria-hidden="true">02</span><p><strong>Share from either device</strong><small>Each new item stays in local history.</small></p></div>
+          <div className="step" role="listitem"><span aria-hidden="true">02</span><p><strong>Check the match code</strong><small>Both screens show the same short code. If they match, no one is in the middle.</small></p></div>
+          <div className="step" role="listitem"><span aria-hidden="true">03</span><p><strong>Share from either device</strong><small>Text and images appear on both screens and stay in each browser&rsquo;s history.</small></p></div>
         </div>
       </div>
       <div className="qr-panel">
@@ -79,7 +83,7 @@ export function HostPairing({ code, status, onRetry, onReset }: HostPairingProps
         </div>
         <div className="pairing-wait">
           <span className={waiting ? 'pulse-dot' : 'status-dot'} aria-hidden="true" />
-          <p>{waitCopy(status)}</p>
+          <p>{waitCopy(status, errorMessage)}</p>
         </div>
         <p className="micro-copy">The room closes 30 minutes after the last device leaves. Activity keeps it open.</p>
       </div>

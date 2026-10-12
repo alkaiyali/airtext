@@ -1,5 +1,5 @@
 import type { DeviceKind } from '../types'
-import { ChevronRightIcon, ComputerIcon, PhoneIcon, RingIcon } from './icons'
+import { CheckIcon, ChevronRightIcon, ComputerIcon, LockIcon, PhoneIcon } from './icons'
 
 interface ModeChooserProps {
   preferred: DeviceKind
@@ -12,22 +12,26 @@ export function ModeChooser({ preferred, onChoose }: ModeChooserProps) {
       <div>
         <p className="eyebrow">One clipboard, two screens</p>
         <h1 id="mode-title">Move text without emailing it to yourself.</h1>
-        <p className="lede">Open airtext on your computer and phone. Pair once, then keep a small, private clipboard between them.</p>
+        <p className="lede">Open airtext on your computer and your phone, scan once, and anything you share shows up on both. Nothing to install, nothing to sign into.</p>
       </div>
       <div className="mode-panel">
         <div className="mode-options" role="group" aria-label="Choose your device">
           <button className="mode-option" type="button" onClick={() => onChoose('desktop')}>
             <span className="mode-icon" aria-hidden="true"><ComputerIcon /></span>
-            <span><strong>Use this computer</strong><small>{preferred === 'desktop' ? 'Recommended on this device' : 'Show a pairing code'}</small></span>
+            <span><strong>Use this computer</strong><small>{preferred === 'desktop' ? 'Recommended · shows a QR code' : 'Shows a QR code to scan'}</small></span>
             <span className="mode-arrow" aria-hidden="true"><ChevronRightIcon /></span>
           </button>
           <button className="mode-option" type="button" onClick={() => onChoose('phone')}>
             <span className="mode-icon" aria-hidden="true"><PhoneIcon /></span>
-            <span><strong>Use this phone</strong><small>{preferred === 'phone' ? 'Recommended on this device' : 'Scan or enter a code'}</small></span>
+            <span><strong>Use this phone</strong><small>{preferred === 'phone' ? 'Recommended · scan or type a code' : 'Scan or type a code'}</small></span>
             <span className="mode-arrow" aria-hidden="true"><ChevronRightIcon /></span>
           </button>
         </div>
-        <p className="privacy-note"><span aria-hidden="true"><RingIcon /></span> Text stays in your two browsers. Rooms close 30 minutes after the last device leaves. Activity keeps them open.</p>
+        <ul className="trust-list" aria-label="Privacy">
+          <li><span aria-hidden="true"><LockIcon /></span> End-to-end encrypted on your devices</li>
+          <li><span aria-hidden="true"><CheckIcon size={15} /></span> No account, no app to install</li>
+          <li><span aria-hidden="true"><CheckIcon size={15} /></span> Your text is never stored on a server</li>
+        </ul>
       </div>
     </section>
   )

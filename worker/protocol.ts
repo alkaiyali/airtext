@@ -107,3 +107,6 @@ export function encode(message: ServerMessage): string {
 }
 
 export { MAX_TEXT_LENGTH, MAX_SEALED_LENGTH }
+
+/** Worker → Room: the caller's network key, for counting room creations. */
+export const LIMIT_KEY_HEADER = 'X-Airtext-Limit-Key'

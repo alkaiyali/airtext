@@ -8,6 +8,8 @@ interface ClipboardComposerProps {
   onShare: (text: string, image?: string) => Promise<void>
   /** False while the ECDH handshake is still running: sharing is gated. */
   canShare?: boolean
+  /** Relay feedback about the last item, e.g. throttled and resending. */
+  notice?: string
 }
 
 function CameraIcon() {
@@ -38,7 +40,7 @@ function PasteIcon() {
   )
 }
 
-export function ClipboardComposer({ onShare, canShare = true }: ClipboardComposerProps) {
+export function ClipboardComposer({ onShare, canShare = true, notice = '' }: ClipboardComposerProps) {
   const [text, setText] = useState('')
   const [image, setImage] = useState('')
   const [message, setMessage] = useState('')
@@ -158,7 +160,7 @@ export function ClipboardComposer({ onShare, canShare = true }: ClipboardCompose
       <textarea id="clipboard-text" value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} placeholder="Paste a link, note, or code — or type it here…" rows={4} maxLength={MAX_TEXT_LENGTH} />
       {image ? <div className="image-preview"><img src={image} alt="Attached preview" /><button className="text-button" type="button" onClick={clearImage}>Remove image</button></div> : null}
       <div className="composer-footer">
-        <span className="composer-hint">{message || (canShare ? 'Text or image · text up to 100,000 characters · images compressed to fit 350 KB' : 'Setting up the secure channel…')}</span>
+        <span className="composer-hint" role="status">{notice || message || (canShare ? 'Text or image · text up to 100,000 characters · images compressed to fit 350 KB' : 'Setting up the secure channel…')}</span>
         <div className="composer-actions">
           <button className="media-button" type="button" title="Take a photo — compressed automatically to fit 350 KB" aria-label="Camera: take a photo" onClick={() => cameraInputRef.current?.click()} disabled={isProcessingImage}><CameraIcon /> {isProcessingImage ? 'Preparing…' : 'Camera'}</button>
           <button className="media-button" type="button" title="Choose an image from your gallery — compressed automatically to fit 350 KB" aria-label="Gallery: choose an image" onClick={() => galleryInputRef.current?.click()} disabled={isProcessingImage}><GalleryIcon /> Gallery</button>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import Room, { isOriginAllowed, shouldAnnounceJoin } from './Room'
+import Room, { isOriginAllowed, roomLimitMessage, shouldAnnounceJoin } from './Room'
 
 interface WireMessage {
   type: string
@@ -264,5 +264,103 @@ describe('anti-abuse', () => {
       await room.webSocketMessage(phone as unknown as WebSocket, '{oops')
     }
     expect(phone.closedWith).toBe('abuse')
+  })
+})
+
+describe('room creation limit', () => {
+  function limiterEnv(responses: number[]) {
+    const calls: string[] = []
+    const env = {
+      LIMITER: {
+        idFromName: (name: string) => name,
+        get: (id: string) => ({
+          fetch: async () => {
+            calls.push(id)
+            const status = responses.shift() ?? 200
+            return new Response(null, { status, headers: status === 429 ? { 'Retry-After': '90' } : {} })
+          },
+        }),
+      },
+    }
+    return { env: env as never, calls }
+  }
+
+  function storageState(store = new Map<string, unknown>()): DurableObjectState {
+    return {
+      getWebSockets: () => [],
+      acceptWebSocket: () => undefined,
+      storage: {
+        get: async (key: string) => store.get(key),
+        put: async (key: string, value: unknown) => { store.set(key, value) },
+        setAlarm: async () => undefined,
+        deleteAll: async () => { store.clear() },
+      },
+    } as unknown as DurableObjectState
+  }
+
+  it('counts only the upgrade that creates the room; joins and reconnects are free', async () => {
+    const { env, calls } = limiterEnv([])
+    const room = new Room(storageState(), env)
+    expect(await room.admit('203.0.113.7')).toBe(0)
+    expect(await room.admit('198.51.100.2')).toBe(0)
+    expect(await room.admit('203.0.113.7')).toBe(0)
+    expect(calls).toEqual(['203.0.113.7'])
+  })
+
+  it('shares one claim between parallel first upgrades', async () => {
+    const { env, calls } = limiterEnv([])
+    const room = new Room(storageState(), env)
+    await Promise.all([room.admit('203.0.113.7'), room.admit('203.0.113.7')])
+    expect(calls).toHaveLength(1)
+  })
+
+  it('remembers creation across eviction via storage', async () => {
+    const store = new Map<string, unknown>([['created', true]])
+    const { env, calls } = limiterEnv([])
+    expect(await new Room(storageState(store), env).admit('203.0.113.7')).toBe(0)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses creation over the limit and lets a later attempt re-check', async () => {
+    const { env, calls } = limiterEnv([429, 200])
+    const room = new Room(storageState(), env)
+    expect(await room.admit('203.0.113.7')).toBe(90)
+    expect(await room.admit('203.0.113.7')).toBe(0)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('counts again once an idle room has been reaped', async () => {
+    const { env, calls } = limiterEnv([])
+    const room = new Room(storageState(), env)
+    await room.admit('203.0.113.7')
+    await room.alarm()
+    await room.admit('203.0.113.7')
+    expect(calls).toHaveLength(2)
+  })
+
+  it('tells people roughly how long to wait', () => {
+    expect(roomLimitMessage(30)).toContain('about 1 minute.')
+    expect(roomLimitMessage(150)).toContain('about 3 minutes.')
+  })
+})
+
+describe('clipboard item rate', () => {
+  it('allows a short burst, then about one item per second', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const room = new Room(fakeState(), {} as never)
+    const desktop = fakeSocket()
+    const phone = fakeSocket()
+    await say(room, desktop, { type: 'hello', version: 1, device: 'desktop' })
+    await say(room, phone, { type: 'hello', version: 1, device: 'phone' })
+    for (let i = 0; i < 4; i += 1) {
+      await say(room, desktop, { type: 'clipboard-item', id: `c${i}`, sealed: 'a.b', createdAt: 1000000 })
+    }
+    expect(wire(phone).filter((type) => type === 'clipboard-item')).toHaveLength(3)
+    expect(errors(desktop).some((message) => message.code === 'rate_limited')).toBe(true)
+    vi.advanceTimersByTime(1_000)
+    await say(room, desktop, { type: 'clipboard-item', id: 'c9', sealed: 'a.b', createdAt: 1001000 })
+    expect(wire(phone).filter((type) => type === 'clipboard-item')).toHaveLength(4)
+    vi.useRealTimers()
   })
 })

@@ -20,6 +20,8 @@ export type RoomClientEvent =
   | { type: 'unsecure' }
   /** The paired peer cleared history (verified under the session key). */
   | { type: 'cleared' }
+  /** A relay message about one item (throttled, too large); the link is fine. */
+  | { type: 'notice'; message: string }
 
 type ClipboardPayload = { text: string; image?: string; kind?: 'text' | 'image' }
 
@@ -29,8 +31,11 @@ const KEEPALIVE_MS = 15_000
 // A hung upgrade (captive portal, dead network) fires neither error nor close,
 // so without this the UI would sit on "Connecting" forever.
 const CONNECT_TIMEOUT_MS = 10_000
+// Relay error codes that mean this connection was refused, as opposed to one
+// message being rejected on a link that is otherwise fine.
+const CONNECTION_ERRORS = new Set(['device_in_use', 'room_limit', 'room_full'])
 // Unacknowledged items are resent after the channel re-secures (a drop can
-// lose an item in flight). Spaced just over the relay's 1 item/second limit.
+// lose an item in flight). Spaced just over the relay's sustained 1 item/second rate.
 const MAX_OUTBOX = 20
 const RESEND_SPACING_MS = 1_100
 // Cap replay memories so a malicious relay cannot grow them without bound.
@@ -351,16 +356,22 @@ export class RoomClient {
         return
       }
       if (message.type === 'error') {
-        // The server's rate-limit message is actionable already; add the one
-        // number that turns "slow down" into a concrete wait.
-        const text = message.message.startsWith('Too many messages')
-          ? `${message.message} You can share about one item per second.`
-          : message.message
-        this.emit({ type: 'status', status: 'error', message: text })
+        // Only connection-level refusals change status. Everything else (a
+        // throttled or oversized item) leaves the link up, so it surfaces as
+        // a notice instead of a "Connection issue" with Retry/Start over.
+        if (CONNECTION_ERRORS.has(message.code)) {
+          this.emit({ type: 'status', status: 'error', message: message.message })
+        } else {
+          // Throttled items are resent below, so say that instead of "try again".
+          const text = message.code === 'rate_limited' ? 'That was a bit fast. airtext will resend it in a moment.' : message.message
+          this.emit({ type: 'notice', message: text })
+        }
         // A definitive rejection (another live socket owns this device) should
         // not be retried forever: the server keeps a cooldown anyway, and a
         // loser that keeps reconnecting would keep re-replacing the winner.
-        if (message.code === 'device_in_use') this.stopRetrying()
+        // The room-creation limit is the same: retrying cannot help until the
+        // network's budget refills, and each retry would just be refused again.
+        if (message.code === 'device_in_use' || message.code === 'room_limit') this.stopRetrying()
         // A throttled item never reached the peer; retry what is unacknowledged.
         if (message.code === 'rate_limited' && this.secure && this.resendTimer === undefined) this.queueResend()
       }

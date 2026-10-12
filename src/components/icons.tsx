@@ -111,6 +111,15 @@ export function MoonIcon({ size = 18 }: IconProps) {
 
 // The privacy mark, previously ◌. A thin open ring: "nothing is written down",
 // stated as a shape rather than a character from an unrelated font.
+export function LockIcon({ size = 15 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+    </svg>
+  )
+}
+
 export function RingIcon({ size = 17 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

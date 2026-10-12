@@ -349,3 +349,48 @@ describe('sendClipboardItem size guard', () => {
     client.close()
   })
 })
+
+describe('relay errors', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function scriptedClient() {
+    const listeners = new Map<string, Array<(event: unknown) => void>>()
+    const sockets: number[] = []
+    const fake = {
+      readyState: 1,
+      send: () => undefined,
+      close: () => undefined,
+      addEventListener: (type: string, fn: (event: unknown) => void) => { listeners.set(type, [...(listeners.get(type) ?? []), fn]) },
+      removeEventListener: () => undefined,
+    }
+    const client = new RoomClient('AB12CD34', 'desktop', () => { sockets.push(1); return fake as unknown as WebSocket })
+    const events: RoomClientEvent[] = []
+    client.subscribe((event) => events.push(event))
+    client.connect()
+    const fire = (type: string, event: unknown = {}) => listeners.get(type)?.forEach((fn) => fn(event))
+    return { client, events, sockets, fire }
+  }
+
+  it('reports a throttled item as a notice, not a connection issue', async () => {
+    const { client, events, fire } = scriptedClient()
+    fire('message', { data: JSON.stringify({ type: 'error', code: 'rate_limited', message: 'Too many messages. Slow down and try again.' }) })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(events.some((event) => event.type === 'status' && event.status === 'error')).toBe(false)
+    expect(events.find((event) => event.type === 'notice')).toMatchObject({ message: expect.stringContaining('resend') })
+    client.close()
+  })
+
+  it('stops reconnecting when the network has hit the room-creation limit', async () => {
+    vi.useFakeTimers()
+    const { client, events, sockets, fire } = scriptedClient()
+    fire('message', { data: JSON.stringify({ type: 'error', code: 'room_limit', message: 'Too many new rooms from this network right now. Try again in about 2 minutes.' }) })
+    await vi.advanceTimersByTimeAsync(0)
+    fire('close')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sockets).toHaveLength(1)
+    expect(events.find((event) => event.type === 'status' && event.status === 'error')).toMatchObject({ message: expect.stringContaining('2 minutes') })
+    client.close()
+  })
+})
