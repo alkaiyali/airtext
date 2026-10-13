@@ -10,9 +10,12 @@ custom_domain = true
 [assets]
 directory = "./dist"
 binding = "ASSETS"
-# Serve assets through the Worker so SECURITY_HEADERS (X-Frame-Options,
-# Referrer-Policy, …) apply to every response; asset-layer serving skips it.
-run_worker_first = true
+# Only the relay needs the Worker. Everything else is served by the asset
+# layer, which is free and unmetered; security headers for those responses
+# come from public/_headers. Unmatched paths (bot probes for /wp-login.php,
+# /.env, …) get the 404 page without invoking the Worker.
+run_worker_first = ["/room/*"]
+not_found_handling = "404-page"
 
 [[durable_objects.bindings]]
 name = "ROOMS"
