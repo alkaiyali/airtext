@@ -1,5 +1,5 @@
 import type { DeviceKind } from '../types'
-import { CheckIcon, ChevronRightIcon, ComputerIcon, LockIcon, PhoneIcon } from './icons'
+import { ChevronRightIcon, ComputerIcon, LockIcon, PhoneIcon } from './icons'
 
 interface ModeChooserProps {
   preferred: DeviceKind
@@ -8,31 +8,28 @@ interface ModeChooserProps {
 
 export function ModeChooser({ preferred, onChoose }: ModeChooserProps) {
   return (
-    <section className="mode-chooser" aria-labelledby="mode-title">
-      <div>
-        <p className="eyebrow">One clipboard, two screens</p>
-        <h1 id="mode-title">Move text without emailing it to yourself.</h1>
-        <p className="lede">Open airtext on your computer and your phone, scan once, and anything you share shows up on both. Nothing to install, nothing to sign into.</p>
+    <section className="screen mode-chooser" aria-labelledby="mode-title">
+      <h1 id="mode-title">Move text between your screens.</h1>
+      <p className="lede">Open airtext on your computer and phone, scan once, and share both ways. No app, no account.</p>
+      <div className="option-list" role="group" aria-label="Choose your device">
+        <button className="option" type="button" onClick={() => onChoose('desktop')}>
+          <span className="option-icon" aria-hidden="true"><ComputerIcon size={20} /></span>
+          <span className="option-text"><strong>Use this computer</strong><small>Shows a QR code to scan</small></span>
+          {preferred === 'desktop' ? <span className="option-badge">Recommended</span> : null}
+          <span className="option-arrow" aria-hidden="true"><ChevronRightIcon size={18} /></span>
+        </button>
+        <button className="option" type="button" onClick={() => onChoose('phone')}>
+          <span className="option-icon" aria-hidden="true"><PhoneIcon size={20} /></span>
+          <span className="option-text"><strong>Use this phone</strong><small>Scan or type a code</small></span>
+          {preferred === 'phone' ? <span className="option-badge">Recommended</span> : null}
+          <span className="option-arrow" aria-hidden="true"><ChevronRightIcon size={18} /></span>
+        </button>
       </div>
-      <div className="mode-panel">
-        <div className="mode-options" role="group" aria-label="Choose your device">
-          <button className="mode-option" type="button" onClick={() => onChoose('desktop')}>
-            <span className="mode-icon" aria-hidden="true"><ComputerIcon /></span>
-            <span><strong>Use this computer</strong><small>{preferred === 'desktop' ? 'Recommended · shows a QR code' : 'Shows a QR code to scan'}</small></span>
-            <span className="mode-arrow" aria-hidden="true"><ChevronRightIcon /></span>
-          </button>
-          <button className="mode-option" type="button" onClick={() => onChoose('phone')}>
-            <span className="mode-icon" aria-hidden="true"><PhoneIcon /></span>
-            <span><strong>Use this phone</strong><small>{preferred === 'phone' ? 'Recommended · scan or type a code' : 'Scan or type a code'}</small></span>
-            <span className="mode-arrow" aria-hidden="true"><ChevronRightIcon /></span>
-          </button>
-        </div>
-        <ul className="trust-list" aria-label="Privacy">
-          <li><span aria-hidden="true"><LockIcon /></span> End-to-end encrypted on your devices</li>
-          <li><span aria-hidden="true"><CheckIcon size={15} /></span> No account, no app to install</li>
-          <li><span aria-hidden="true"><CheckIcon size={15} /></span> Your text is never stored on a server</li>
-        </ul>
-      </div>
+      <p className="trust-line">
+        <span><LockIcon size={13} /> End-to-end encrypted</span>
+        <span>No account</span>
+        <span>Nothing stored on a server</span>
+      </p>
     </section>
   )
 }

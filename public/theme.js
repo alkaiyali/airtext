@@ -6,7 +6,7 @@
 try {
   if (localStorage.getItem('airtext-theme') === 'dark') {
     document.documentElement.dataset.theme = 'dark'
-    document.querySelector('meta[name="theme-color"]').setAttribute('content', '#191d1b')
+    document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0e0f0e')
   }
 } catch {
   /* private mode: light is the correct default */

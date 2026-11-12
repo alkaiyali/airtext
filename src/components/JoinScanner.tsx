@@ -145,49 +145,49 @@ export function JoinScanner({ status, initialCode = '', errorMessage, onRetry, o
   const showPeerHint = peerHint && (status === 'connecting' || status === 'waiting')
 
   return (
-    <section className="join-shell" aria-labelledby="join-title">
-      <div className="join-header">
-        <ConnectionStatus status={status} device="phone" onRetry={onRetry} onReset={onReset} />
-        <p className="eyebrow">Phone join</p>
-        <h1 id="join-title">{manualMode ? 'Enter the code from your computer.' : 'Point your camera at the computer.'}</h1>
-        <p className="lede">Your phone joins the room your computer is hosting. Nothing is saved to an account.</p>
-        {showPeerHint ? (
-          <p className="join-hint" role="status">
-            No computer has joined this room yet. Check that the code matches the computer&rsquo;s screen.
-            <button className="text-button" type="button" onClick={onReset}>Change code</button>
-          </p>
-        ) : null}
-      </div>
+    <section className="screen join-shell" aria-labelledby="join-title">
+      <ConnectionStatus status={status} device="phone" onRetry={onRetry} onReset={onReset} />
+      <h1 id="join-title">{manualMode ? 'Enter the code from your computer' : 'Scan the code on your computer'}</h1>
+      <p className="lede">Your phone joins the room your computer is hosting. Nothing is saved to an account.</p>
+      {showPeerHint ? (
+        <p className="join-hint" role="status">
+          No computer has joined this room yet. Check that the code matches the computer&rsquo;s screen.
+          <button className="text-button" type="button" onClick={onReset}>Change code</button>
+        </p>
+      ) : null}
       <div className="scanner-panel">
         {manualMode ? (
-          <div className="manual-panel">
+          <>
             {cameraFailure ? <p className="join-notice" role="alert">{cameraFailureCopy(cameraFailure)}</p> : null}
-            <form className="manual-code-form" onSubmit={submitCode}>
-              <label htmlFor="room-code">8-character room code</label>
-              <p className="field-hint" id="room-code-hint">On your computer&rsquo;s airtext screen, under the QR code.</p>
-              <div className="manual-code-row">
+            <div className="manual-card">
+              <form className="manual-code-form" onSubmit={submitCode}>
+                <label htmlFor="room-code">Room code</label>
+                <p className="field-hint" id="room-code-hint">8 characters, shown under the QR code on your computer.</p>
                 <input
                   ref={inputRef}
                   id="room-code"
+                  className="code-input"
                   value={code}
                   onChange={(event) => { setCode(event.target.value.toUpperCase()); setCodeError('') }}
                   inputMode="text"
                   autoComplete="one-time-code"
+                  autoCapitalize="characters"
+                  spellCheck={false}
                   maxLength={9}
                   placeholder="AB12 CD34"
                   aria-invalid={Boolean(codeError)}
                   aria-describedby={codeError ? 'room-code-error' : 'room-code-hint'}
                 />
                 <button className="primary-button" type="submit">Join room</button>
-              </div>
-            </form>
+              </form>
+            </div>
             {cameraFailure && retryable ? (
               <button className="text-button center-button" type="button" onClick={openCamera}>Try the camera again</button>
             ) : null}
             {!cameraFailure ? (
               <button className="text-button center-button" type="button" onClick={openCamera}>Use the camera instead</button>
             ) : null}
-          </div>
+          </>
         ) : (
           <>
             <div className="scanner-window">

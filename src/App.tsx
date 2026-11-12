@@ -3,7 +3,7 @@ import { ClipboardComposer } from './components/ClipboardComposer'
 import { ClipboardHistory } from './components/ClipboardHistory'
 import { ConnectionStatus } from './components/ConnectionStatus'
 import { ModeChooser } from './components/ModeChooser'
-import { ArrowLeftIcon, CheckIcon, ComputerIcon, MoonIcon, PhoneIcon, RingIcon, SunIcon } from './components/icons'
+import { ArrowLeftIcon, CheckIcon, LockIcon, MoonIcon, SunIcon } from './components/icons'
 import { createEntry, loadHistory, saveEntry, clearHistory, deleteEntry } from './lib/historyStore'
 import { preferredDevice } from './lib/device'
 import { copyEntry } from './lib/clipboard'
@@ -151,7 +151,7 @@ function App() {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     // Keep the mobile browser chrome in step with the canvas instead of
     // stranding a cream bar above a dark workspace.
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#191d1b' : '#f4f0e8')
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#0e0f0e' : '#f5f5f3')
     try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light') } catch { /* private mode */ }
   }, [dark])
 
@@ -355,6 +355,12 @@ function App() {
     return <button className="theme-toggle" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'} title={dark ? 'Switch to light theme' : 'Switch to dark theme'}>{dark ? <SunIcon /> : <MoonIcon />}</button>
   }
 
+  function confirmMatch(): void {
+    clientRef.current?.confirmMatch()
+    confirmedMatchCodeRef.current = matchCode
+    setConfirmedMatchCode(matchCode)
+  }
+
   function workspace(): React.JSX.Element {
     const matchConfirmed = secure && matchCode !== '' && confirmedMatchCode === matchCode
     // Sharing is unlocked only after both people compared the code and this
@@ -362,7 +368,45 @@ function App() {
     // silently substituted device cannot inherit the old confirmation.
     const canShare = status === 'connected' && matchConfirmed
     const peerHere = status === 'connected'
-    return <main className="workspace-shell"><header className="workspace-header"><div><p className="eyebrow">Your room <span className="room-code-inline">{roomCode.slice(0, 4)} {roomCode.slice(4)}</span></p><h1 ref={workspaceHeadingRef} tabIndex={-1}>Clipboard, in sync.</h1></div><div className="workspace-actions"><ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />{themeButton()}<button className="secondary-button" type="button" onClick={reset}>Leave room</button></div></header><div className="workspace-grid"><div className="workspace-main"><ClipboardComposer onShare={share} canShare={canShare} notice={notice} blockedMessage={secure && matchCode && !matchConfirmed ? 'Confirm the match code in the match check card to enable sharing.' : undefined} /><ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} /></div><aside className="workspace-rail"><div className="rail-card"><span className="rail-kicker">Connected device</span><div className="device-line"><span className="device-orb" aria-hidden="true">{device === 'desktop' ? <PhoneIcon size={20} /> : <ComputerIcon size={20} />}</span><div><strong>{device === 'desktop' ? 'Phone' : 'Computer'}</strong><small>{peerHere ? (secure ? (matchConfirmed ? 'Secure channel ready' : 'Verify the match code below') : 'Setting up secure channel…') : 'Not in the room right now'}</small></div><span className={peerHere ? 'online-dot' : 'online-dot is-offline'} aria-label={peerHere ? 'The other device is connected' : 'The other device is not connected'} /></div><p>Share from either device — new items appear at the top of both histories.</p></div>{matchCode ? <div className="rail-card"><span className="rail-kicker">Match check</span><div className="code-row"><strong>{matchCode}</strong></div>{secure ? (matchConfirmed ? <p className="match-confirmed"><CheckIcon size={13} /> Match confirmed — sharing enabled.</p> : <><p>Same code on the other screen? Confirm it to unlock sharing.</p><button className="secondary-button full-width match-confirm-button" type="button" onClick={() => { clientRef.current?.confirmMatch(); confirmedMatchCodeRef.current = matchCode; setConfirmedMatchCode(matchCode) }}>Codes match — enable sharing</button></>) : <p>Compare this with the other screen once it connects. They should match.</p>}</div> : null}<div className="rail-note"><span aria-hidden="true"><RingIcon /></span><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></div><label className="auto-copy-toggle"><input type="checkbox" checked={autoCopy} onChange={toggleAutoCopy} /><span>Auto-copy new items to this device&rsquo;s clipboard</span></label></aside></div></main>
+    const peerName = device === 'desktop' ? 'Phone' : 'Computer'
+    const peerLine = peerHere ? (secure ? `${peerName} connected` : 'Setting up secure channel…') : `${peerName} not in the room`
+    return (
+      <main className="workspace-shell">
+        <header className="topbar">
+          <span className="wordmark">airtext<span aria-hidden="true">·</span></span>
+          <div className="topbar-actions">
+            <ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />
+            {themeButton()}
+            <button className="secondary-button" type="button" onClick={reset}>Leave</button>
+          </div>
+        </header>
+        <div className="room-bar">
+          <div>
+            <h1 ref={workspaceHeadingRef} tabIndex={-1}>Clipboard, in sync.</h1>
+            <p className="room-meta">
+              <span>Room <code>{roomCode.slice(0, 4)} {roomCode.slice(4)}</code></span>
+              <span className="sep" aria-hidden="true">·</span>
+              <span>{peerLine}</span>
+              {matchConfirmed ? <><span className="sep" aria-hidden="true">·</span><span className="is-verified" title={`Match code ${matchCode}`}><CheckIcon size={12} /> Verified</span></> : null}
+            </p>
+          </div>
+          <label className="switch"><input type="checkbox" checked={autoCopy} onChange={toggleAutoCopy} /><span>Auto-copy incoming</span></label>
+        </div>
+        {matchCode && !matchConfirmed ? (
+          <section className="verify-card" aria-labelledby="verify-title">
+            <div>
+              <h2 id="verify-title">Check the match code</h2>
+              <p>{secure ? 'Same code on the other screen? Confirm it to unlock sharing.' : 'Compare this with the other screen once it reconnects. They should match.'}</p>
+            </div>
+            {secure ? <button className="primary-button" type="button" onClick={confirmMatch}><CheckIcon /> Codes match</button> : null}
+            <code className="match-code">{matchCode}</code>
+          </section>
+        ) : null}
+        <ClipboardComposer onShare={share} canShare={canShare} notice={notice} blockedMessage={secure && matchCode && !matchConfirmed ? 'Confirm the match code above to enable sharing.' : undefined} />
+        <ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} />
+        <footer className="workspace-footer"><LockIcon size={14} /><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></footer>
+      </main>
+    )
   }
 
   // Desktop shows the QR pairing screen until actually connected; the phone
@@ -388,7 +432,22 @@ function App() {
   // The wordmark is not a control: it used to be an <a> that silently reset the
   // room. Leaving is explicit (back button / Leave room), so the brand stays
   // inert instead of hiding a destructive action behind a navigation affordance.
-  return <main className="app-shell"><header className="app-header"><span className="wordmark">airtext<span aria-hidden="true">·</span></span><div className="app-header-actions"><span className="header-note">A tiny bridge between screens</span>{themeButton()}</div></header><Suspense fallback={<p className="lede">Loading…</p>}>{device === null ? <ModeChooser preferred={preferred} onChoose={(next) => { if (next === 'desktop') startHosting(); else setDevice(next) }} /> : device === 'desktop' ? <HostPairing code={hostCode} status={status} errorMessage={statusMessage} onRetry={retry} onReset={reset} /> : <JoinScanner status={status} initialCode={initialInvite} errorMessage={statusMessage} onRetry={retry} onConnect={(code) => connect(code, 'phone')} onReset={reset} />}</Suspense>{device !== null && !showWorkspace ? <button className="back-button" type="button" onClick={reset}><ArrowLeftIcon /> Choose another device</button> : null}</main>
+  return (
+    <main className="app-shell">
+      <header className="app-header">
+        <span className="wordmark">airtext<span aria-hidden="true">·</span></span>
+        <div className="app-header-actions">{themeButton()}</div>
+      </header>
+      <Suspense fallback={<p className="lede screen">Loading…</p>}>
+        {device === null
+          ? <ModeChooser preferred={preferred} onChoose={(next) => { if (next === 'desktop') startHosting(); else setDevice(next) }} />
+          : device === 'desktop'
+            ? <HostPairing code={hostCode} status={status} errorMessage={statusMessage} onRetry={retry} onReset={reset} />
+            : <JoinScanner status={status} initialCode={initialInvite} errorMessage={statusMessage} onRetry={retry} onConnect={(code) => connect(code, 'phone')} onReset={reset} />}
+      </Suspense>
+      {device !== null && !showWorkspace ? <button className="back-button" type="button" onClick={reset}><ArrowLeftIcon /> Choose another device</button> : null}
+    </main>
+  )
 }
 
 export default App
