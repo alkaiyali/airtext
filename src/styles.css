@@ -159,8 +159,8 @@ code { font-family: var(--font-mono); }
 .back-button:hover { color: var(--ink); background: var(--hover); }
 
 /* ── Status pill ───────────────────────────────────────────────────────── */
-.connection-status { display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px; color: var(--muted); font-size: 13px; font-weight: 550; background: var(--paper); border: 1px solid var(--line); border-radius: 999px; }
-.connection-status .text-button { min-height: 22px; color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.connection-status { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; min-height: 30px; padding: 0 12px; color: var(--muted); font-size: 13px; font-weight: 550; background: var(--paper); border: 1px solid var(--line); border-radius: 999px; }
+.connection-status .text-button { min-height: 24px; color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .status-dot, .pulse-dot { display: inline-block; flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .connection-status--connected { color: var(--ink); }
 .connection-status--connected .status-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 22%, transparent); }
@@ -224,7 +224,7 @@ code { font-family: var(--font-mono); }
 .manual-code-form label { display: block; font-size: 14px; font-weight: 600; }
 .field-hint { margin: 3px 0 14px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .code-input { display: block; width: 100%; height: 56px; padding: 0 14px; font-family: var(--font-mono); font-size: 22px; font-weight: 600; letter-spacing: .18em; text-align: center; text-transform: uppercase; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius-sm); }
-.code-input::placeholder { color: var(--line-strong); }
+.code-input::placeholder { color: var(--faint); }
 .code-input:focus { border-color: var(--line-strong); }
 .code-input[aria-invalid="true"] { border-color: var(--danger); }
 .manual-code-form .primary-button { width: 100%; margin-top: 10px; min-height: 46px; }
@@ -259,7 +259,7 @@ code { font-family: var(--font-mono); }
 .verify-card .primary-button { grid-row: 1; grid-column: 2; }
 
 .composer { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); transition: border-color .15s ease; }
-.composer:focus-within { border-color: var(--line-strong); }
+.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .composer textarea { display: block; width: 100%; min-height: 128px; padding: 18px 18px 8px; resize: vertical; color: var(--ink); font-size: 16px; line-height: 1.55; background: transparent; border: 0; outline: none; }
 .composer textarea::placeholder { color: var(--faint); }
 .image-preview { display: flex; align-items: center; gap: 12px; margin: 0 18px 8px; }
@@ -320,7 +320,9 @@ code { font-family: var(--font-mono); }
 
 @media (max-width: 640px) {
   .app-shell, .workspace-shell { width: calc(100% - 32px); }
-  .app-header, .topbar { height: 60px; }
+  .app-header { height: 60px; }
+  .topbar { flex-wrap: wrap; height: auto; min-height: 60px; padding: 12px 0; row-gap: 10px; }
+  .topbar-actions { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
   .screen { justify-content: flex-start; padding-top: 24px; }
   .room-bar { flex-direction: column; align-items: flex-start; padding-top: 16px; }
   .room-bar h1 { font-size: 22px; }
@@ -343,5 +345,6 @@ code { font-family: var(--font-mono); }
   .theme-toggle, .icon-button, .history-actions .icon-button { width: 44px; height: 44px; }
   .primary-button, .secondary-button, .copy-button, .clear-button, .back-button, .text-button { min-height: 44px; }
   .history-search { height: 44px; }
+  .topbar-actions .secondary-button, .connection-status .text-button { min-height: 44px; }
   .switch { min-height: 44px; }
 }

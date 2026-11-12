@@ -375,7 +375,8 @@ function App() {
         <header className="topbar">
           <span className="wordmark">airtext<span aria-hidden="true">·</span></span>
           <div className="topbar-actions">
-            <ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />
+            {/* No onReset: Leave beside it already does that, and the duplicate overflowed phone widths. */}
+            <ConnectionStatus status={status} device={device ?? 'desktop'} onRetry={retry} />
             {themeButton()}
             <button className="secondary-button" type="button" onClick={reset}>Leave</button>
           </div>

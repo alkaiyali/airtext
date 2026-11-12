@@ -119,7 +119,7 @@ export function ClipboardHistory({ entries, cleared = false, onClear, onDelete, 
   return (
     <section className="history-section" aria-labelledby="history-title">
       <div className="history-head">
-        <h2 id="history-title">History<span className="count-label">{entries.length}/{historyLimit}</span></h2>
+        <h2 id="history-title">History{' '}<span className="count-label">{entries.length}/{historyLimit}</span></h2>
         {entries.length > 0 ? (
           <div className="heading-actions">
             <input className="history-search" type="search" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search clipboard history" />
