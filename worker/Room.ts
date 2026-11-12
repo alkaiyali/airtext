@@ -59,8 +59,8 @@ const CONTROL_WINDOW_MS = 500
 // Past this many garbage/rate-limit strikes the socket is closed instead of
 // warned: keeps one abusive connection from burning CPU forever.
 const MAX_VIOLATIONS = 10
-// Recently relayed clipboard ids, so a replayed (or double-sent) id is dropped
-// at the relay instead of making the peer burn an AES-GCM decrypt + ack.
+// Recently relayed clipboard ids, so a retry after a lost ack is recognised
+// and re-forwarded; the receiving client dedupes by the sealed id and re-acks.
 const MAX_SEEN_IDS = 200
 
 function blankAttachment(now = Date.now()): Attachment {
@@ -301,7 +301,11 @@ export class Room {
         return
       }
       if (this.seenClipboardIds.has(message.id)) {
-        this.noteViolation(socket, attachment, 'duplicate', 'This item was already shared.')
+        // A sender may be retrying because its ack was lost. Re-forward
+        // instead of treating the retry as abuse: the receiver dedupes by the
+        // sealed id and re-acks, so a legitimate item can still be recovered.
+        // (The client only retries items bound to this same peer key.)
+        this.broadcast({ ...message, type: 'clipboard-item', source: attachment.device }, socket)
         return
       }
       this.rememberClipboardId(message.id)

@@ -10,8 +10,8 @@ A small clipboard bridge between a computer and a phone. Open the app on the com
 
 1. Choose **Use this computer**. A temporary room opens automatically and displays a QR code plus an 8-character fallback code.
 2. Choose **Use this phone** on the phone, scan the QR, or enter the fallback code.
-3. After both browsers show **Connected**, share text from either composer.
-4. Each browser keeps its own bounded history in IndexedDB, scoped to the current room — a new session starts with a clean trail. Nothing is associated with an account.
+3. After both browsers show **Connected**, compare the match check code, confirm it on each screen, then share text from either composer.
+4. Each browser keeps its own bounded history in IndexedDB, scoped to the current room — a new session starts with a clean trail. The history is plaintext at rest (not encrypted in browser storage), so clear it before handing the device to someone else. Nothing is associated with an account.
 
 ## Privacy and limits
 
@@ -19,7 +19,7 @@ A small clipboard bridge between a computer and a phone. Open the app on the com
 - Invite links carry the room code in the query string; codes are short-lived bearer tokens that expire with the room.
 - Only two browser connections are allowed in a room (max 4 sockets briefly during reconnect overlap; unidentified sockets are closed after 10s).
 - Clipboard text is sealed on-device with AES-GCM under ephemeral ECDH (P-256) session keys before relay, forwarded to the other live browser, and never persisted by the Worker. The room code is only the rendezvous name — it cannot decrypt anything, and keys are discarded when you leave (forward secrecy). The relay still sees metadata (timing, size, IPs): treat rooms as private, not anonymous.
-- Each screen shows a **match check** code once the secure channel is up. If both screens show the same code, no one is sitting in the middle; if they differ, leave the room and start over.
+- Each screen shows a **match check** code once the secure channel is up. Both people compare the code and confirm it on their own screen before sharing is enabled; if the codes differ, leave the room and start over.
 - Text entries are capped at 100,000 characters, images are auto-compressed under 350 KB, and each local history is capped at 100 entries per room.
 - New rooms are rate-limited per network: a burst of 30, then one more per minute. Joining or reconnecting to an existing room is never counted. Clipboard items are limited to a burst of 3, then 1 per second per device; throttled items are resent automatically.
 - Camera and clipboard permissions are controlled by the browser. HTTPS is required by modern browsers for those APIs.

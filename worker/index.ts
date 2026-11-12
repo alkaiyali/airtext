@@ -14,7 +14,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(self), clipboard-read=(self), clipboard-write=(self)',
+  'Permissions-Policy': 'camera=(self), clipboard-read=(self), clipboard-write=(self), geolocation=(), microphone=(), payment=(), usb=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   // HSTS is ignored over plain HTTP (local dev), honored over HTTPS (prod).
@@ -29,7 +29,7 @@ export function contentSecurityPolicy(requestUrl: string): string {
   const { host, protocol } = new URL(requestUrl)
   const socketOrigin = `${protocol === 'https:' ? 'wss:' : 'ws:'}//${host}`
   return (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "default-src 'self'; script-src 'self'; style-src 'self'; " +
     `img-src 'self' data: blob:; media-src blob: data:; connect-src 'self' ${socketOrigin}; ` +
     "worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; " +
     "form-action 'self'; frame-ancestors 'none'"
@@ -49,10 +49,16 @@ function withSecurityHeaders(response: Response, requestUrl: string): Response {
  * /64, so keying on the full address would let one network rotate past the
  * limit; IPv4 addresses are used as-is. */
 export function limiterKey(ip: string): string {
-  if (!ip.includes(':')) return ip
-  const [head, tail = ''] = ip.toLowerCase().split('::')
+  const lower = ip.toLowerCase()
+  // Cloudflare normally returns IPv4 as a dotted quad, but if it ever presents
+  // an IPv4-mapped IPv6 address, every mapped address would otherwise collapse
+  // into the same 0:0:0:0::/64 bucket and exhaust one global room budget.
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower)
+  if (mapped) return mapped[1]
+  if (!lower.includes(':')) return lower
+  const [head, tail = ''] = lower.split('::')
   const headGroups = head ? head.split(':') : []
-  const tailGroups = ip.includes('::') && tail ? tail.split(':') : []
+  const tailGroups = lower.includes('::') && tail ? tail.split(':') : []
   const missing = Math.max(0, 8 - headGroups.length - tailGroups.length)
   const groups = [...headGroups, ...Array<string>(missing).fill('0'), ...tailGroups]
   return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, '')).join(':')}::/64`

@@ -1,5 +1,5 @@
 import type { ClientMessage, DeviceKind, ServerMessage } from '../types'
-import { isServerMessage, MAX_SEALED_LENGTH } from '../types'
+import { isServerMessage, isValidId, isValidTimestamp, MAX_SEALED_LENGTH } from '../types'
 import {
   deriveSession,
   exportPublicKey,
@@ -68,7 +68,12 @@ export class RoomClient {
   private prevSession: SessionKeys | null = null
   private secure = false
   private exchangeSeq = 0
-  private readonly outbox = new Map<string, { createdAt: number; payload: ClipboardPayload }>()
+  /** The peer key this user explicitly vouched for after comparing codes. */
+  private confirmedPeerKey: string | null = null
+  // Each pending item is bound to the peer key it was sent to: a reconnect of
+  // the same device resends it, but a different device that later takes the
+  // room slot must never receive previously shared content.
+  private readonly outbox = new Map<string, { createdAt: number; payload: ClipboardPayload; peerKey: string }>()
   private resendQueue: string[] = []
   private resendTimer: number | undefined
   // Replayed clear-history controls (same sealed bytes) are ignored.
@@ -94,6 +99,9 @@ export class RoomClient {
   connect(): void {
     this.manuallyClosed = false
     this.reconnectAttempts = 0
+    this.outbox.clear()
+    this.seenClears.clear()
+    this.seenClipboardIds.clear()
     this.resetCrypto()
     void generateKeyPair().then((pair) => {
       if (this.manuallyClosed) return
@@ -125,6 +133,11 @@ export class RoomClient {
 
   isSecure(): boolean {
     return this.secure
+  }
+
+  /** Called after the user compares the match codes; unlocks sending. */
+  confirmMatch(): void {
+    if (this.secure) this.confirmedPeerKey = this.peerPublicKey
   }
 
   private openSocket(): void {
@@ -204,7 +217,7 @@ export class RoomClient {
     let confirm: string | undefined
     if (this.peerPublicKey && this.session) {
       try {
-        confirm = await makeConfirm(this.session.confirmKey, this.ownPublicKey)
+        confirm = await makeConfirm(this.session.confirmKey, this.ownPublicKey, this.peerPublicKey)
       } catch {
         confirm = undefined
       }
@@ -220,12 +233,16 @@ export class RoomClient {
 
   private async onKeyExchange(message: Extract<ServerMessage, { type: 'key-exchange' }>): Promise<void> {
     if (!this.keyPair || !this.ownPublicKey) return
+    // A relay can reflect our own exchange back at us; self-ECDH would produce
+    // a valid-looking (but useless) session. Only the opposite device may be
+    // our peer, and its key must differ from ours.
+    if (message.publicKey === this.ownPublicKey || message.source === this.device) return
     const seen = ++this.exchangeSeq
     if (message.publicKey === this.peerPublicKey) {
       // Re-announcement of the known key: verify a confirmation if offered.
       if (message.confirm && !this.secure && this.session) {
         try {
-          if (await verifyConfirm(this.session.confirmKey, message.publicKey, message.confirm)) {
+          if (await verifyConfirm(this.session.confirmKey, this.ownPublicKey, message.publicKey, message.confirm)) {
             if (seen === this.exchangeSeq) this.markSecure()
           }
         } catch { /* fail closed: stay unsecure */ }
@@ -247,7 +264,7 @@ export class RoomClient {
     // Answer with our own key plus proof we derived the same secret.
     let confirm: string | undefined
     try {
-      confirm = await makeConfirm(session.confirmKey, this.ownPublicKey)
+      confirm = await makeConfirm(session.confirmKey, this.ownPublicKey, message.publicKey)
     } catch {
       return
     }
@@ -261,7 +278,7 @@ export class RoomClient {
     })
     if (message.confirm) {
       try {
-        if (await verifyConfirm(session.confirmKey, message.publicKey, message.confirm)) {
+        if (await verifyConfirm(session.confirmKey, this.ownPublicKey, message.publicKey, message.confirm)) {
           if (seen === this.exchangeSeq) this.markSecure()
         }
       } catch { /* fail closed */ }
@@ -294,9 +311,15 @@ export class RoomClient {
     const id = this.resendQueue.shift()
     if (id === undefined) return
     const item = this.outbox.get(id)
-    if (item && this.secure && this.session && this.socket?.readyState === WebSocket.OPEN) {
+    if (
+      item &&
+      item.peerKey === this.peerPublicKey &&
+      this.secure &&
+      this.session &&
+      this.socket?.readyState === WebSocket.OPEN
+    ) {
       try {
-        await this.sealAndSend(id, item.createdAt, item.payload)
+        await this.sealAndSend(id, item.createdAt, item.payload, this.session)
       } catch { /* stays in the outbox for the next re-secure */ }
     }
     if (this.resendQueue.length > 0 && this.secure && this.resendTimer === undefined) {
@@ -317,6 +340,7 @@ export class RoomClient {
     this.session = null
     this.prevSession = null
     this.secure = false
+    this.confirmedPeerKey = null
     this.exchangeSeq += 1
   }
 
@@ -380,32 +404,57 @@ export class RoomClient {
         // or a third party with the room code cannot forge or replay this.
         const plaintext = await this.openSealed(message.sealed)
         if (plaintext === null) return
-        const control = JSON.parse(plaintext) as { type?: unknown; id?: unknown }
-        if (control.type !== 'clear-history' || typeof control.id !== 'string' || this.seenClears.has(control.id)) return
-        rememberSeen(this.seenClears, control.id)
+        const control: unknown = JSON.parse(plaintext)
+        if (!control || typeof control !== 'object') return
+        const { type, id } = control as { type?: unknown; id?: unknown }
+        if (type !== 'clear-history' || !isValidId(id) || this.seenClears.has(id)) return
+        rememberSeen(this.seenClears, id)
         this.emit({ type: 'cleared' })
         return
       }
       if (message.type === 'clipboard-item') {
-        // Defense in depth: the relay validates these, but a compromised relay
-        // could still send oversized/empty ids to burn decrypt CPU.
+        // isServerMessage already bounds these; keep the check as defense in
+        // depth for callers that construct server events directly.
         if (!message.id || message.sealed.length > MAX_SEALED_LENGTH) return
         if (this.seenClipboardIds.has(message.id)) {
           this.send({ type: 'ack', id: message.id })
           return
         }
         const plaintext = await this.openSealed(message.sealed)
-        if (plaintext !== null) {
-          rememberSeen(this.seenClipboardIds, message.id)
-          this.emit({
-            type: 'decrypted',
-            // Fall back to the outer message's metadata for old-format senders
-            // that did not seal id/createdAt inside the payload.
-            payload: { ...JSON.parse(plaintext), id: message.id, createdAt: message.createdAt },
-          })
-          // Acknowledge delivery so the sender can mark the item as delivered.
-          this.send({ type: 'ack', id: message.id })
+        if (plaintext === null) return
+        let inner: Record<string, unknown>
+        try {
+          const parsed: unknown = JSON.parse(plaintext)
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+          inner = parsed as Record<string, unknown>
+        } catch {
+          return
         }
+        // The sealed metadata is authenticated; the outer envelope is not.
+        // Prefer the inner values so a relay cannot replay the same ciphertext
+        // under fresh ids, reorder history, or pin it to a forged timestamp.
+        const id = isValidId(inner.id) ? inner.id : message.id
+        const createdAt = isValidTimestamp(inner.createdAt) ? inner.createdAt : message.createdAt
+        if (this.seenClipboardIds.has(id)) {
+          this.send({ type: 'ack', id })
+          return
+        }
+        if (typeof inner.text !== 'string') return
+        const image = typeof inner.image === 'string' ? inner.image : undefined
+        const kind = inner.kind === 'image' ? 'image' : inner.kind === 'text' ? 'text' : undefined
+        rememberSeen(this.seenClipboardIds, id)
+        this.emit({
+          type: 'decrypted',
+          payload: {
+            text: inner.text,
+            ...(image ? { image } : {}),
+            ...(kind ? { kind } : {}),
+            id,
+            createdAt,
+          },
+        })
+        // Acknowledge the authenticated id so the sender can clear its outbox.
+        this.send({ type: 'ack', id })
       }
       if (message.type === 'ack') {
         this.outbox.delete(message.id)
@@ -437,18 +486,30 @@ export class RoomClient {
     if (this.socket?.readyState !== WebSocket.OPEN) {
       throw new Error('The room is reconnecting — try again in a moment.')
     }
-    if (!this.secure || !this.session) {
+    const session = this.session
+    const peerKey = this.peerPublicKey
+    if (!this.secure || !session || !peerKey) {
       throw new Error('Setting up the secure channel — try again in a moment.')
     }
-    await this.sealAndSend(id, createdAt, payload)
+    if (this.confirmedPeerKey !== peerKey) {
+      throw new Error('Compare the match code on both screens and confirm it before sharing.')
+    }
+    await this.sealAndSend(id, createdAt, payload, session)
     // Held until the peer acks, so a drop mid-flight doesn't lose the item.
-    this.outbox.set(id, { createdAt, payload })
+    // Save the key it was sealed for: a later, different peer must never
+    // receive this content through the automatic resend path.
+    this.outbox.set(id, { createdAt, payload, peerKey })
     if (this.outbox.size > MAX_OUTBOX) this.outbox.delete(this.outbox.keys().next().value!)
   }
 
-  private async sealAndSend(id: string, createdAt: number, payload: ClipboardPayload): Promise<void> {
-    if (!this.session) throw new Error('Setting up the secure channel — try again in a moment.')
-    const sealedPayload = await seal(this.session.messageKey, JSON.stringify({ ...payload, id, createdAt }))
+  private async sealAndSend(
+    id: string,
+    createdAt: number,
+    payload: ClipboardPayload,
+    session: SessionKeys | null = this.session,
+  ): Promise<void> {
+    if (!session) throw new Error('Setting up the secure channel — try again in a moment.')
+    const sealedPayload = await seal(session.messageKey, JSON.stringify({ ...payload, id, createdAt }))
     if (sealedPayload.length > MAX_SEALED_LENGTH) {
       throw new Error('This item is too large to share in one piece.')
     }
@@ -474,6 +535,9 @@ export class RoomClient {
     this.resetCrypto()
     this.socket?.close()
     this.socket = null
+    // Drop subscribers so an in-flight decrypt from this room cannot mutate
+    // the UI after the user has moved to another room.
+    this.listeners.clear()
   }
 
   private scheduleReconnect(message = 'Connection lost. Reconnecting…'): void {

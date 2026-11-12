@@ -200,7 +200,7 @@ describe('anti-abuse', () => {
     vi.useRealTimers()
   })
 
-  it('drops replayed clipboard ids at the relay', async () => {
+  it('re-forwards a retried id so a lost ack can be recovered', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000_000)
     const room = new Room(fakeState(), {} as never)
@@ -212,8 +212,10 @@ describe('anti-abuse', () => {
     vi.advanceTimersByTime(1_100)
     await say(room, desktop, { type: 'clipboard-item', id: 'dup', sealed: 'a.b', createdAt: 1001100 })
 
-    expect(wire(phone).filter((type) => type === 'clipboard-item')).toHaveLength(1)
-    expect(errors(desktop).some((message) => message.code === 'duplicate')).toBe(true)
+    // The receiver dedupes by sealed id and re-acks; the relay must not treat
+    // a legitimate retry as abuse, or the sender's outbox can never clear.
+    expect(wire(phone).filter((type) => type === 'clipboard-item')).toHaveLength(2)
+    expect(errors(desktop).some((message) => message.code === 'duplicate')).toBe(false)
   })
 
   it('throttles ping floods without breaking the 15s keepalive', async () => {

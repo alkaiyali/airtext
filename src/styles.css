@@ -314,8 +314,10 @@ h2 { margin-bottom: 0; font-size: 25px; font-weight: 700; letter-spacing: -.025e
 .device-line strong { font-size: 13px; }
 .device-line small { margin-top: 4px; color: var(--muted); font-size: 13px; }
 .device-line .online-dot { margin-left: auto; }
-/* The match check is short by design; let it sit on one line in the narrow rail. */
-.rail-card .code-row strong { font-size: 21px; letter-spacing: .1em; margin-right: -.1em; white-space: nowrap; }
+/* 96-bit match check: wrap at the groups rather than overflow the narrow rail. */
+.rail-card .code-row strong { font-size: 18px; letter-spacing: .08em; margin-right: -.08em; line-height: 1.5; text-align: center; white-space: normal; }
+.rail-card .match-confirmed { display: flex; align-items: center; gap: 6px; color: var(--green-ink); font-size: 13px; font-weight: 600; }
+.match-confirm-button { margin-top: 14px; }
 .rail-card > p, .rail-note p { margin: 18px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .rail-note { display: flex; gap: 10px; padding-top: 2px; color: var(--green); }
 .rail-note > span { display: grid; place-items: center; flex-shrink: 0; }

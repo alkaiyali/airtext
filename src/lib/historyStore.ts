@@ -9,7 +9,11 @@ const FALLBACK_KEY = 'airtext-history'
 function normalize(entries: ClipboardEntry[]): ClipboardEntry[] {
   const seen = new Set<string>()
   return entries
-    .filter((entry) => (entry.kind === 'image' ? Boolean(entry.image) : entry.text.trim().length > 0))
+    .filter((entry) => (
+      entry.kind === 'image'
+        ? typeof entry.image === 'string' && entry.image.length > 0
+        : typeof entry.text === 'string' && entry.text.trim().length > 0
+    ))
     .sort((a, b) => b.createdAt - a.createdAt)
     .filter((entry) => {
       // Dedupe by stable id: the same text shared twice is two entries with

@@ -10,6 +10,8 @@ interface ClipboardComposerProps {
   canShare?: boolean
   /** Relay feedback about the last item, e.g. throttled and resending. */
   notice?: string
+  /** Explains why sharing is locked when the channel is otherwise ready. */
+  blockedMessage?: string
 }
 
 function CameraIcon() {
@@ -40,7 +42,7 @@ function PasteIcon() {
   )
 }
 
-export function ClipboardComposer({ onShare, canShare = true, notice = '' }: ClipboardComposerProps) {
+export function ClipboardComposer({ onShare, canShare = true, notice = '', blockedMessage = '' }: ClipboardComposerProps) {
   const [text, setText] = useState('')
   const [image, setImage] = useState('')
   const [message, setMessage] = useState('')
@@ -109,9 +111,20 @@ export function ClipboardComposer({ onShare, canShare = true, notice = '' }: Cli
     }
   }
 
+  // Some mobile browsers (long-press paste, keyboard clipboard chips, link
+  // pastes) change the textarea without firing a React change event, leaving
+  // Share disabled. Re-read the DOM value after the paste lands.
+  function syncTextFromDom(element: HTMLTextAreaElement): void {
+    setText((current) => (current === element.value ? current : element.value))
+  }
+
   function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>): void {
     const imageItem = Array.from(event.clipboardData.items).find((item) => item.type.startsWith('image/'))
-    if (!imageItem) return
+    if (!imageItem) {
+      const element = event.currentTarget
+      window.setTimeout(() => syncTextFromDom(element), 0)
+      return
+    }
     event.preventDefault()
     const blob = imageItem.getAsFile()
     if (blob) void attachBlob(blob)
@@ -157,10 +170,10 @@ export function ClipboardComposer({ onShare, canShare = true, notice = '' }: Cli
         <label htmlFor="clipboard-text">Share to the other device</label>
         <button className="text-button paste-button" type="button" onClick={pasteFromClipboard}><PasteIcon /> Paste from clipboard</button>
       </div>
-      <textarea id="clipboard-text" value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} placeholder="Paste a link, note, or code — or type it here…" rows={4} maxLength={MAX_TEXT_LENGTH} />
+      <textarea id="clipboard-text" value={text} onChange={(event) => setText(event.target.value)} onInput={(event) => syncTextFromDom(event.currentTarget)} onBlur={(event) => syncTextFromDom(event.currentTarget)} onPaste={handlePaste} placeholder="Paste a link, note, or code — or type it here…" rows={4} maxLength={MAX_TEXT_LENGTH} />
       {image ? <div className="image-preview"><img src={image} alt="Attached preview" /><button className="text-button" type="button" onClick={clearImage}>Remove image</button></div> : null}
       <div className="composer-footer">
-        <span className="composer-hint" role="status">{notice || message || (canShare ? 'Text or image · text up to 100,000 characters · images compressed to fit 350 KB' : 'Setting up the secure channel…')}</span>
+        <span className="composer-hint" role="status">{notice || message || (canShare ? 'Text or image · text up to 100,000 characters · images compressed to fit 350 KB' : blockedMessage || 'Setting up the secure channel…')}</span>
         <div className="composer-actions">
           <button className="media-button" type="button" title="Take a photo — compressed automatically to fit 350 KB" aria-label="Camera: take a photo" onClick={() => cameraInputRef.current?.click()} disabled={isProcessingImage}><CameraIcon /> {isProcessingImage ? 'Preparing…' : 'Camera'}</button>
           <button className="media-button" type="button" title="Choose an image from your gallery — compressed automatically to fit 350 KB" aria-label="Gallery: choose an image" onClick={() => galleryInputRef.current?.click()} disabled={isProcessingImage}><GalleryIcon /> Gallery</button>

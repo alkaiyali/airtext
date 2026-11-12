@@ -172,6 +172,10 @@ describe('secure channel', () => {
         sockets.a?.deliver({ type: 'hello', version: 1, peers: 2 })
         sockets.b?.deliver({ type: 'hello', version: 1, peers: 2 })
       },
+      confirm() {
+        a.confirmMatch()
+        b.confirmMatch()
+      },
       close() {
         a.close()
         b.close()
@@ -194,6 +198,7 @@ describe('secure channel', () => {
     pair.open()
     await waitFor(() => fingerprint(pair.eventsA) !== '' && fingerprint(pair.eventsB) !== '', 'secure channel')
     expect(fingerprint(pair.eventsA)).toBe(fingerprint(pair.eventsB))
+    pair.confirm()
 
     await pair.a.sendClipboardItem('id-9', 123, { text: 'hello phone', kind: 'text' })
     await waitFor(() => pair.eventsB.some((event) => event.type === 'decrypted'), 'delivery')
@@ -232,6 +237,7 @@ describe('secure channel', () => {
     pair.b.connect()
     pair.open()
     await waitFor(() => fingerprint(pair.eventsA) !== '' && fingerprint(pair.eventsB) !== '', 'secure channel')
+    pair.confirm()
     const sentA: string[] = []
     const sendA = pair.sockets.a!.send.bind(pair.sockets.a!)
     pair.sockets.a!.send = (data: string) => {
@@ -248,6 +254,65 @@ describe('secure channel', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(pair.eventsB.filter((event) => event.type === 'decrypted')).toHaveLength(1)
     pair.close()
+  })
+
+  it('trusts sealed id/createdAt over a relay-rewritten envelope', async () => {
+    const pair = linkedPair('AB12CD34')
+    pair.a.connect()
+    pair.b.connect()
+    pair.open()
+    await waitFor(() => fingerprint(pair.eventsA) !== '' && fingerprint(pair.eventsB) !== '', 'secure channel')
+    pair.confirm()
+
+    const sendA = pair.sockets.a!.send.bind(pair.sockets.a!)
+    const relayed: { message: Record<string, unknown> | null } = { message: null }
+    pair.sockets.a!.send = (data: string) => {
+      const message = JSON.parse(data) as Record<string, unknown>
+      if (message.type === 'clipboard-item') {
+        relayed.message = message
+        return
+      }
+      sendA(data)
+    }
+
+    await pair.a.sendClipboardItem('sealed-id', 111, { text: 'authenticated metadata', kind: 'text' })
+    expect(relayed.message).not.toBeNull()
+    pair.sockets.b!.deliver({ ...relayed.message!, id: 'tampered-id', createdAt: 999_999, source: 'desktop' })
+    await waitFor(() => pair.eventsB.some((event) => event.type === 'decrypted'), 'delivery')
+    const decrypted = pair.eventsB.find((event) => event.type === 'decrypted')
+    expect(decrypted?.payload.id).toBe('sealed-id')
+    expect(decrypted?.payload.createdAt).toBe(111)
+    pair.close()
+  })
+
+  it('ignores an exchange that reflects its own public key', async () => {
+    const sent: string[] = []
+    const events: RoomClientEvent[] = []
+    const holder: { socket: RelaySocket | null } = { socket: null }
+    const client = new RoomClient('AB12CD34', 'desktop', () => {
+      holder.socket = new RelaySocket((data) => { sent.push(data) })
+      return holder.socket as unknown as WebSocket
+    })
+    client.subscribe((event) => events.push(event))
+    client.connect()
+    holder.socket?.open()
+    await waitFor(() => sent.some((data) => JSON.parse(data).type === 'key-exchange'), 'introduction')
+    const intro = sent
+      .map((data) => JSON.parse(data) as { type: string; publicKey?: string })
+      .find((message) => message.type === 'key-exchange')
+    expect(intro?.publicKey).toBeTruthy()
+    const before = sent.filter((data) => JSON.parse(data).type === 'key-exchange').length
+    holder.socket?.deliver({
+      type: 'key-exchange',
+      id: 'reflected',
+      publicKey: intro!.publicKey,
+      createdAt: 2,
+      source: 'phone',
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(sent.filter((data) => JSON.parse(data).type === 'key-exchange')).toHaveLength(before)
+    expect(events.some((event) => event.type === 'secure')).toBe(false)
+    client.close()
   })
 
   it('identifies with its resume token in hello', async () => {
@@ -271,6 +336,20 @@ describe('secure channel', () => {
     pair.open()
     // Immediately: sockets open but the ECDH round trip hasn't completed.
     await expect(pair.a.sendClipboardItem('id-x', 1, { text: 'too soon', kind: 'text' })).rejects.toThrow()
+    pair.close()
+  })
+
+  it('refuses to share until the match code is explicitly confirmed', async () => {
+    const pair = linkedPair('AB12CD34')
+    pair.a.connect()
+    pair.b.connect()
+    pair.open()
+    await waitFor(() => fingerprint(pair.eventsA) !== '' && fingerprint(pair.eventsB) !== '', 'secure channel')
+
+    await expect(pair.a.sendClipboardItem('id-gated', 1, { text: 'not yet', kind: 'text' })).rejects.toThrow(/confirm/)
+    pair.confirm()
+    await pair.a.sendClipboardItem('id-gated', 1, { text: 'confirmed', kind: 'text' })
+    await waitFor(() => pair.eventsB.some((event) => event.type === 'decrypted'), 'delivery')
     pair.close()
   })
 })
@@ -298,12 +377,13 @@ describe('sendClipboardItem size guard', () => {
       type: 'key-exchange',
       id: 'peer-1',
       publicKey: peerPub,
-      confirm: await makeConfirm(session.confirmKey, peerPub),
+      confirm: await makeConfirm(session.confirmKey, peerPub, intro.publicKey),
       createdAt: 1,
       source: 'phone',
     })
     await waitFor(() => events.some((event) => event.type === 'secure'), 'secure')
-    return { client, sent, session, holder, peerPub }
+    client.confirmMatch()
+    return { client, sent, events, session, holder, peerPub, ownPublicKey: intro.publicKey }
   }
 
   it('sends an item at the documented text limit', async () => {
@@ -323,7 +403,7 @@ describe('sendClipboardItem size guard', () => {
   })
 
   it('resends unacknowledged items after the channel re-secures', async () => {
-    const { client, sent, session, holder, peerPub } = await securedClient()
+    const { client, sent, session, holder, peerPub, ownPublicKey } = await securedClient()
     await client.sendClipboardItem('lost', 1, { text: 'dropped in flight', kind: 'text' })
     await client.sendClipboardItem('acked', 2, { text: 'made it', kind: 'text' })
     holder.socket?.deliver({ type: 'ack', id: 'acked' })
@@ -332,11 +412,39 @@ describe('sendClipboardItem size guard', () => {
     // The link drops and comes back; the peer re-confirms the same session.
     client.retry()
     holder.socket?.open()
-    holder.socket?.deliver({ type: 'key-exchange', id: 'peer-2', publicKey: peerPub, confirm: await makeConfirm(session.confirmKey, peerPub), createdAt: 2, source: 'phone' })
+    holder.socket?.deliver({ type: 'key-exchange', id: 'peer-2', publicKey: peerPub, confirm: await makeConfirm(session.confirmKey, peerPub, ownPublicKey), createdAt: 2, source: 'phone' })
     const before = sent.length
     await waitFor(() => sent.slice(before).some((data) => JSON.parse(data).type === 'clipboard-item'), 'resend')
     const resent = sent.slice(before).map((data) => JSON.parse(data) as { type: string; id?: string }).filter((m) => m.type === 'clipboard-item')
     expect(resent.map((m) => m.id)).toEqual(['lost'])
+    client.close()
+  })
+
+  it('does not resend pending items to a different peer key', async () => {
+    const { client, sent, events, holder, ownPublicKey } = await securedClient()
+    await client.sendClipboardItem('pending-for-old-peer', 1, { text: 'old session only', kind: 'text' })
+    const before = sent.length
+
+    const intruder = await generateKeyPair()
+    const intruderPub = await exportPublicKey(intruder)
+    const intruderSession = await deriveSession(intruder, ownPublicKey, 'AB12CD34')
+    holder.socket?.deliver({
+      type: 'key-exchange',
+      id: 'intruder',
+      publicKey: intruderPub,
+      confirm: await makeConfirm(intruderSession.confirmKey, intruderPub, ownPublicKey),
+      createdAt: 3,
+      source: 'phone',
+    })
+    await waitFor(() => events.filter((event) => event.type === 'secure').length >= 2, 'new secure channel')
+    await expect(client.sendClipboardItem('new-peer', 4, { text: 'not confirmed', kind: 'text' })).rejects.toThrow(/confirm/)
+    await new Promise((resolve) => setTimeout(resolve, 1_300))
+
+    const resent = sent
+      .slice(before)
+      .map((data) => JSON.parse(data) as { type: string; id?: string })
+      .filter((message) => message.type === 'clipboard-item')
+    expect(resent).toHaveLength(0)
     client.close()
   })
 

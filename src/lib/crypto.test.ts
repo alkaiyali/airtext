@@ -23,7 +23,8 @@ describe('ECDH session', () => {
   it('derives identical keys and match codes on both sides', async () => {
     const { sessionA, sessionB } = await handshake('AB12CD34')
     expect(sessionA.verifyCode).toBe(sessionB.verifyCode)
-    expect(sessionA.verifyCode).toMatch(/^[0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4}$/)
+    expect(sessionA.verifyCode).toMatch(/^[0-9a-f]{4}(?: [0-9a-f]{4}){5}$/)
+    expect(sessionA.verifyCode.replace(/ /g, '')).toHaveLength(24)
     const sealed = await seal(sessionA.messageKey, JSON.stringify({ text: 'secret note' }))
     expect(await open(sessionB.messageKey, sealed)).toBe('{"text":"secret note"}')
   })
@@ -39,14 +40,16 @@ describe('ECDH session', () => {
     expect(await open(room2.messageKey, sealed)).toBeNull()
   })
 
-  it('confirms key agreement and rejects tampered proofs', async () => {
+  it('confirms key agreement and rejects tampered or reflected proofs', async () => {
     const { aPub, bPub, sessionA, sessionB } = await handshake('AB12CD34')
-    const confirmA = await makeConfirm(sessionA.confirmKey, aPub)
-    const confirmB = await makeConfirm(sessionB.confirmKey, bPub)
-    expect(await verifyConfirm(sessionB.confirmKey, aPub, confirmA)).toBe(true)
-    expect(await verifyConfirm(sessionA.confirmKey, bPub, confirmB)).toBe(true)
-    expect(await verifyConfirm(sessionB.confirmKey, aPub, confirmB)).toBe(false)
-    expect(await verifyConfirm(sessionB.confirmKey, aPub, 'not-valid!!!')).toBe(false)
+    const confirmA = await makeConfirm(sessionA.confirmKey, aPub, bPub)
+    const confirmB = await makeConfirm(sessionB.confirmKey, bPub, aPub)
+    expect(await verifyConfirm(sessionB.confirmKey, bPub, aPub, confirmA)).toBe(true)
+    expect(await verifyConfirm(sessionA.confirmKey, aPub, bPub, confirmB)).toBe(true)
+    expect(await verifyConfirm(sessionB.confirmKey, bPub, aPub, confirmB)).toBe(false)
+    expect(await verifyConfirm(sessionB.confirmKey, bPub, aPub, 'not-valid!!!')).toBe(false)
+    // A's proof is bound to B, so reflecting it back to A cannot verify.
+    expect(await verifyConfirm(sessionA.confirmKey, aPub, aPub, confirmA)).toBe(false)
   })
 
   it('gives a MITM separate sessions with (overwhelmingly likely) different codes', async () => {

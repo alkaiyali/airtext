@@ -68,7 +68,7 @@ export function HostPairing({ code, status, errorMessage = '', onRetry, onReset 
         <p className="lede">Keep this tab open while you pair. No app needed on the phone: its camera opens airtext straight into this room.</p>
         <div className="steps" role="list" aria-label="Pairing steps">
           <div className="step" role="listitem"><span aria-hidden="true">01</span><p><strong>Scan this screen</strong><small>On your phone, open the camera and scan the QR code.</small></p></div>
-          <div className="step" role="listitem"><span aria-hidden="true">02</span><p><strong>Check the match code</strong><small>Both screens show the same short code. If they match, no one is in the middle.</small></p></div>
+          <div className="step" role="listitem"><span aria-hidden="true">02</span><p><strong>Check the match code</strong><small>Both screens show the same code. Compare it, then confirm it on each screen to unlock sharing.</small></p></div>
           <div className="step" role="listitem"><span aria-hidden="true">03</span><p><strong>Share from either device</strong><small>Text and images appear on both screens and stay in each browser&rsquo;s history.</small></p></div>
         </div>
       </div>

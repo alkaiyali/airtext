@@ -13,6 +13,44 @@ export interface ClipboardEntry {
 
 export type RoomStatus = 'idle' | 'connecting' | 'waiting' | 'connected' | 'disconnected' | 'error'
 
+export const MAX_TEXT_LENGTH = 100_000
+export const MAX_IMAGE_BYTES = 350_000
+// Mirrors worker/protocol.ts: sealed payloads above this never fit a frame.
+export const MAX_SEALED_LENGTH = 900_000
+// Mirror worker/protocol.ts key-exchange bounds (asserted in types.test.ts).
+export const MAX_PUBKEY_LENGTH = 256
+export const MAX_CONFIRM_LENGTH = 128
+export const MAX_ID_LENGTH = 80
+export const MAX_SEALED_CONTROL_LENGTH = 512
+export const MAX_RESUME_LENGTH = 64
+// Greatest date representable as a JS timestamp (8.64e15). Mirrors the Worker:
+// relays must never forward NaN/Infinity or out-of-range dates.
+export const MAX_TIMESTAMP = 8_640_000_000_000_000
+
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/
+
+function isPeerCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 8
+}
+
+function isBoundedSealed(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max
+}
+
+export function isValidId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_ID_LENGTH
+}
+
+export function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= MAX_TIMESTAMP
+  )
+}
+
 export type ClientMessage =
   | { type: 'hello'; version: 1; device: DeviceKind; resume?: string }
   | { type: 'clipboard-item'; id: string; sealed: string; createdAt: number }
@@ -38,27 +76,49 @@ export function isServerMessage(value: unknown): value is ServerMessage {
   if (typeof message.type !== 'string') return false
 
   if (message.type === 'hello') {
-    return message.version === 1 && typeof message.peers === 'number'
+    return message.version === 1 && isPeerCount(message.peers)
   }
   if (message.type === 'peer-joined' || message.type === 'peer-left') {
-    return typeof message.peers === 'number'
+    return isPeerCount(message.peers)
   }
-  if (message.type === 'ack') return typeof message.id === 'string'
-  if (message.type === 'clear-history') return typeof message.sealed === 'string'
+  if (message.type === 'ack') return isValidId(message.id)
+  if (message.type === 'clear-history') {
+    return isBoundedSealed(message.sealed, MAX_SEALED_CONTROL_LENGTH)
+  }
   if (message.type === 'clipboard-item') {
-    return typeof message.id === 'string' && typeof message.sealed === 'string' && typeof message.createdAt === 'number' && (message.source === 'desktop' || message.source === 'phone')
-  }
-  if (message.type === 'key-exchange') {
     return (
-      typeof message.id === 'string' &&
-      typeof message.publicKey === 'string' &&
-      (message.confirm === undefined || typeof message.confirm === 'string') &&
-      typeof message.createdAt === 'number' &&
+      isValidId(message.id) &&
+      isBoundedSealed(message.sealed, MAX_SEALED_LENGTH) &&
+      isValidTimestamp(message.createdAt) &&
       (message.source === 'desktop' || message.source === 'phone')
     )
   }
-  if (message.type === 'pong') return typeof message.timestamp === 'number'
-  if (message.type === 'error') return typeof message.code === 'string' && typeof message.message === 'string'
+  if (message.type === 'key-exchange') {
+    return (
+      isValidId(message.id) &&
+      typeof message.publicKey === 'string' &&
+      message.publicKey.length > 0 &&
+      message.publicKey.length <= MAX_PUBKEY_LENGTH &&
+      BASE64URL_RE.test(message.publicKey) &&
+      (message.confirm === undefined ||
+        (typeof message.confirm === 'string' &&
+          message.confirm.length > 0 &&
+          message.confirm.length <= MAX_CONFIRM_LENGTH &&
+          BASE64URL_RE.test(message.confirm))) &&
+      isValidTimestamp(message.createdAt) &&
+      (message.source === 'desktop' || message.source === 'phone')
+    )
+  }
+  if (message.type === 'pong') return isValidTimestamp(message.timestamp)
+  if (message.type === 'error') {
+    return (
+      typeof message.code === 'string' &&
+      message.code.length > 0 &&
+      message.code.length <= 64 &&
+      typeof message.message === 'string' &&
+      message.message.length <= 500
+    )
+  }
   return false
 }
 
@@ -69,23 +129,33 @@ export function isClientMessage(value: unknown): value is ClientMessage {
     return (
       message.version === 1 &&
       (message.device === 'desktop' || message.device === 'phone') &&
-      (message.resume === undefined || typeof message.resume === 'string')
+      (message.resume === undefined ||
+        (typeof message.resume === 'string' && message.resume.length > 0 && message.resume.length <= MAX_RESUME_LENGTH))
     )
   }
   if (message.type === 'clipboard-item') {
-    return typeof message.id === 'string' && typeof message.sealed === 'string' && typeof message.createdAt === 'number'
+    return isValidId(message.id) && isBoundedSealed(message.sealed, MAX_SEALED_LENGTH) && isValidTimestamp(message.createdAt)
   }
   if (message.type === 'key-exchange') {
     return (
-      typeof message.id === 'string' &&
+      isValidId(message.id) &&
       typeof message.publicKey === 'string' &&
-      (message.confirm === undefined || typeof message.confirm === 'string') &&
-      typeof message.createdAt === 'number'
+      message.publicKey.length > 0 &&
+      message.publicKey.length <= MAX_PUBKEY_LENGTH &&
+      BASE64URL_RE.test(message.publicKey) &&
+      (message.confirm === undefined ||
+        (typeof message.confirm === 'string' &&
+          message.confirm.length > 0 &&
+          message.confirm.length <= MAX_CONFIRM_LENGTH &&
+          BASE64URL_RE.test(message.confirm))) &&
+      isValidTimestamp(message.createdAt)
     )
   }
-  if (message.type === 'ack') return typeof message.id === 'string'
-  if (message.type === 'clear-history') return typeof message.sealed === 'string'
-  if (message.type === 'ping') return typeof message.timestamp === 'number'
+  if (message.type === 'ack') return isValidId(message.id)
+  if (message.type === 'clear-history') {
+    return isBoundedSealed(message.sealed, MAX_SEALED_CONTROL_LENGTH)
+  }
+  if (message.type === 'ping') return isValidTimestamp(message.timestamp)
   return false
 }
 
@@ -109,14 +179,6 @@ const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'
 const ROOM_CODE_LENGTH = 8
 // Bytes at or above the largest multiple of 32 would bias the sampling.
 const ALPHABET_BYTE_LIMIT = Math.floor(256 / ROOM_CODE_ALPHABET.length) * ROOM_CODE_ALPHABET.length
-
-export const MAX_TEXT_LENGTH = 100_000
-export const MAX_IMAGE_BYTES = 350_000
-// Mirrors worker/protocol.ts: sealed payloads above this never fit a frame.
-export const MAX_SEALED_LENGTH = 900_000
-// Mirror worker/protocol.ts key-exchange bounds (asserted in types.test.ts).
-export const MAX_PUBKEY_LENGTH = 256
-export const MAX_CONFIRM_LENGTH = 128
 
 export function createRoomCode(): string {
   let code = ''

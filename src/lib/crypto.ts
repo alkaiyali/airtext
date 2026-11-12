@@ -7,9 +7,10 @@
 // humans detect an active relay MITM by comparing screens.
 
 const IV_BYTES = 12
-// 48-bit match code: offline collision search costs ~2^24 ECDH operations,
-// and every attempt needs a live join both peers can see.
-const VERIFY_BYTES = 6
+// 96-bit match code. An active relay has to find two independent ephemeral
+// secrets whose codes collide; at 96 bits that offline birthday search costs
+// ~2^48 ECDH operations rather than the ~2^24 a 48-bit code allowed.
+const VERIFY_BYTES = 12
 
 export interface SessionKeys {
   messageKey: CryptoKey
@@ -94,21 +95,33 @@ export async function deriveSession(
     await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: enc('airtext-verify-v1') }, base, VERIFY_BYTES * 8),
   )
   const hex = Array.from(verifyBits, (b) => b.toString(16).padStart(2, '0')).join('')
-  const verifyCode = `${hex.slice(0, 4)} ${hex.slice(4, 8)} ${hex.slice(8, 12)}`
+  // Grouped in fours so a long code is still easy to compare by eye.
+  const verifyCode = (hex.match(/.{4}/g) ?? [hex]).join(' ')
   return { messageKey, confirmKey, verifyCode }
 }
 
-/** Prove knowledge of the shared secret, bound to our public key. */
-export async function makeConfirm(confirmKey: CryptoKey, ownPublicKey: string): Promise<string> {
-  const mac = await crypto.subtle.sign('HMAC', confirmKey, enc(`airtext-confirm:${ownPublicKey}`))
+/** Prove knowledge of the shared secret, bound to both ends of the transcript. */
+export async function makeConfirm(
+  confirmKey: CryptoKey,
+  ownPublicKey: string,
+  peerPublicKey: string,
+): Promise<string> {
+  const mac = await crypto.subtle.sign('HMAC', confirmKey, enc(`airtext-confirm:${ownPublicKey}:${peerPublicKey}`))
   return bytesToBase64Url(mac)
 }
 
 /** Check the peer's proof; false means mismatched keys — fail closed. */
-export async function verifyConfirm(confirmKey: CryptoKey, peerPublicKey: string, confirm: string): Promise<boolean> {
+export async function verifyConfirm(
+  confirmKey: CryptoKey,
+  ownPublicKey: string,
+  peerPublicKey: string,
+  confirm: string,
+): Promise<boolean> {
   try {
     const mac = base64UrlToBytes(confirm)
-    return await crypto.subtle.verify('HMAC', confirmKey, mac, enc(`airtext-confirm:${peerPublicKey}`))
+    // The sender signed "sender:sender's peer"; from our side that is
+    // "peer:us". Binding both keys means a reflected proof cannot validate.
+    return await crypto.subtle.verify('HMAC', confirmKey, mac, enc(`airtext-confirm:${peerPublicKey}:${ownPublicKey}`))
   } catch {
     return false
   }

@@ -17,11 +17,29 @@ interface ClipboardHistoryProps {
 // entry cost ~7ms per 100 items on every render (search keystrokes included).
 const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
 
+function validDate(timestamp: number): Date | null {
+  if (!Number.isFinite(timestamp)) return null
+  const date = new Date(timestamp)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 function formatTime(timestamp: number): string {
+  const date = validDate(timestamp)
+  if (!date) return 'just now'
   const delta = Date.now() - timestamp
   if (delta < 60_000) return 'just now'
   if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`
-  return timeFormatter.format(timestamp)
+  return timeFormatter.format(date)
+}
+
+// A corrupted local entry or a malicious relay must not be able to make
+// Date#toISOString throw during render.
+function isoTime(timestamp: number): string | undefined {
+  return validDate(timestamp)?.toISOString()
+}
+
+function localTime(timestamp: number): string {
+  return validDate(timestamp)?.toLocaleString() ?? 'Unknown time'
 }
 
 // The empty state's job is to start the first share, not describe the feature.
@@ -103,7 +121,7 @@ export function ClipboardHistory({ entries, cleared = false, onClear, onDelete, 
       <div className="section-heading"><div><p className="eyebrow">Your local trail</p><h2 id="history-title">Clipboard history</h2></div><div className="heading-actions"><span className="count-label">{entries.length} / {historyLimit}</span>{entries.length > 0 ? <button className="clear-button" type="button" onClick={handleClear}>{confirming ? 'Confirm?' : 'Clear history'}</button> : null}</div></div>
       {entries.length > 0 ? <input className="history-search" type="search" placeholder="Search history…" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search clipboard history" /> : null}
       {copyError ? <p className="error-message error-message--light" role="alert">{copyError}</p> : null}
-      {filtered.length === 0 ? emptyState() : <div className="history-list">{filtered.map((entry) => { const isLong = (entry.text?.length ?? 0) > 240; const isExpanded = expandedId === entry.id; const delivered = entry.source === 'this device' && deliveredIds.has(entry.id); return <article className="history-item" key={entry.id}><div className="history-meta"><span className={`source-tag source-tag--${entry.source === 'this device' ? 'local' : 'remote'}`}>{entry.source === 'this device' ? 'This device' : 'Other device'}</span><time dateTime={new Date(entry.createdAt).toISOString()} title={new Date(entry.createdAt).toLocaleString()}>{formatTime(entry.createdAt)}</time>{delivered ? <span className="delivered-badge" title="Delivered to the other device"><CheckIcon size={11} /> delivered</span> : null}</div>{entry.kind === 'image' && entry.image ? <div className="history-image-wrap"><img className="history-image" src={entry.image} alt={entry.text || 'Shared image'} loading="lazy" /></div> : null}{entry.text ? <p className={`history-text ${isLong && !isExpanded ? 'is-truncated' : ''}`}>{entry.text}</p> : null}<div className="history-actions">{isLong ? <button className="text-button" type="button" onClick={() => setExpandedId(isExpanded ? '' : entry.id)}>{isExpanded ? 'Show less' : 'Show more'}</button> : null}{onDelete ? <button className="text-button" type="button" onClick={() => onDelete(entry.id)} aria-label="Delete this item">Delete</button> : null}<button className="copy-button" type="button" onClick={() => copyItem(entry)}>{copiedId === entry.id ? 'Copied' : 'Copy'} {copiedId === entry.id ? <CheckIcon /> : <ArrowUpRightIcon />}</button></div></article> })}</div>}
+      {filtered.length === 0 ? emptyState() : <div className="history-list">{filtered.map((entry) => { const isLong = (entry.text?.length ?? 0) > 240; const isExpanded = expandedId === entry.id; const delivered = entry.source === 'this device' && deliveredIds.has(entry.id); return <article className="history-item" key={entry.id}><div className="history-meta"><span className={`source-tag source-tag--${entry.source === 'this device' ? 'local' : 'remote'}`}>{entry.source === 'this device' ? 'This device' : 'Other device'}</span><time dateTime={isoTime(entry.createdAt)} title={localTime(entry.createdAt)}>{formatTime(entry.createdAt)}</time>{delivered ? <span className="delivered-badge" title="Delivered to the other device"><CheckIcon size={11} /> delivered</span> : null}</div>{entry.kind === 'image' && entry.image ? <div className="history-image-wrap"><img className="history-image" src={entry.image} alt={entry.text || 'Shared image'} loading="lazy" /></div> : null}{entry.text ? <p className={`history-text ${isLong && !isExpanded ? 'is-truncated' : ''}`}>{entry.text}</p> : null}<div className="history-actions">{isLong ? <button className="text-button" type="button" onClick={() => setExpandedId(isExpanded ? '' : entry.id)}>{isExpanded ? 'Show less' : 'Show more'}</button> : null}{onDelete ? <button className="text-button" type="button" onClick={() => onDelete(entry.id)} aria-label="Delete this item">Delete</button> : null}<button className="copy-button" type="button" onClick={() => copyItem(entry)}>{copiedId === entry.id ? 'Copied' : 'Copy'} {copiedId === entry.id ? <CheckIcon /> : <ArrowUpRightIcon />}</button></div></article> })}</div>}
     </section>
   )
 }

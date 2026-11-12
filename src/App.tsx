@@ -3,7 +3,7 @@ import { ClipboardComposer } from './components/ClipboardComposer'
 import { ClipboardHistory } from './components/ClipboardHistory'
 import { ConnectionStatus } from './components/ConnectionStatus'
 import { ModeChooser } from './components/ModeChooser'
-import { ArrowLeftIcon, ComputerIcon, MoonIcon, PhoneIcon, RingIcon, SunIcon } from './components/icons'
+import { ArrowLeftIcon, CheckIcon, ComputerIcon, MoonIcon, PhoneIcon, RingIcon, SunIcon } from './components/icons'
 import { createEntry, loadHistory, saveEntry, clearHistory, deleteEntry } from './lib/historyStore'
 import { preferredDevice } from './lib/device'
 import { copyEntry } from './lib/clipboard'
@@ -120,6 +120,9 @@ function App() {
   const [client, setClient] = useState<RoomClient | null>(null)
   const [secure, setSecure] = useState(false)
   const [matchCode, setMatchCode] = useState('')
+  // The match code the user explicitly vouched for. A new peer (or a rekey)
+  // produces a different code, which locks sharing until it is confirmed.
+  const [confirmedMatchCode, setConfirmedMatchCode] = useState('')
   const [autoCopy, setAutoCopy] = useState(() => { try { return localStorage.getItem(AUTO_COPY_KEY) === '1' } catch { return false } })
   const [deliveredIds, setDeliveredIds] = useState<Set<string>>(new Set())
   const [dark, setDark] = useState(() => { try { return localStorage.getItem(THEME_KEY) === 'dark' } catch { return false } })
@@ -133,11 +136,13 @@ function App() {
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null)
   // Refs mirror state for the connect() idempotency check: without them the
   // callback closes over a stale render and rebuilds the socket on every
-  // QR re-decode or double submit. Synced in effects (not during render) per
-  // react-hooks/refs.
+  // QR re-decode or double submit. Synced outside render (in effects or at the
+  // event that changes them) per react-hooks/refs.
   const roomCodeRef = useRef(roomCode)
   const deviceRef = useRef(device)
   const autoCopyRef = useRef(autoCopy)
+  const matchCodeRef = useRef(matchCode)
+  const confirmedMatchCodeRef = useRef(confirmedMatchCode)
   useEffect(() => { roomCodeRef.current = roomCode }, [roomCode])
   useEffect(() => { deviceRef.current = device }, [device])
   useEffect(() => { autoCopyRef.current = autoCopy }, [autoCopy])
@@ -152,10 +157,15 @@ function App() {
 
   useEffect(() => {
     if (!roomCode) return
+    let cancelled = false
     loadHistory(roomCode).then((next) => {
+      // An in-flight read for the previous room must not paint its history
+      // into the new room's workspace.
+      if (cancelled || roomCodeRef.current !== roomCode) return
       setHistory(next)
       setHistoryCleared(false)
     })
+    return () => { cancelled = true }
   }, [roomCode])
 
   const connect = useCallback((code: string, nextDevice: DeviceKind): void => {
@@ -171,6 +181,18 @@ function App() {
     // between "waiting" and "connected" on every attempt.
     if (clientRef.current && roomCodeRef.current === parsed && deviceRef.current === nextDevice && clientRef.current.isOpen()) return
     clientRef.current?.close()
+    setSecure(false)
+    setMatchCode('')
+    setConfirmedMatchCode('')
+    // Keep the refs in step immediately: the new socket can deliver a message
+    // before React commits the state updates, and auto-copy must not inherit
+    // the previous room's confirmation in that window.
+    matchCodeRef.current = ''
+    confirmedMatchCodeRef.current = ''
+    setNotice('')
+    setHistory([])
+    setHistoryCleared(false)
+    setDeliveredIds(new Set())
     const nextClient = new RoomClient(parsed, nextDevice, undefined, resumeTokenFor(parsed, nextDevice))
     clientRef.current = nextClient
     nextClient.subscribe((event) => {
@@ -194,19 +216,35 @@ function App() {
           image,
         }
         saveEntry(entry, parsed).then((next) => {
+          if (roomCodeRef.current !== parsed) return
           setHistory(next)
           setHistoryCleared(false)
         })
-        if (autoCopyRef.current) void copyEntry(entry)
+        // Never push a received item into the OS clipboard until this user has
+        // confirmed the peer's match code; otherwise an unverified peer could
+        // write to the clipboard before the pairing check.
+        if (
+          autoCopyRef.current &&
+          roomCodeRef.current === parsed &&
+          matchCodeRef.current !== '' &&
+          confirmedMatchCodeRef.current === matchCodeRef.current
+        ) {
+          void copyEntry(entry)
+        }
       } else if (event.type === 'delivered') {
         setDeliveredIds((prev) => new Set(prev).add(event.id))
       } else if (event.type === 'secure') {
         setSecure(true)
         setMatchCode(event.fingerprint)
+        matchCodeRef.current = event.fingerprint
       } else if (event.type === 'unsecure') {
         setSecure(false)
+        // Keep the displayed code for continuity, but block auto-copy while the
+        // channel is not currently proven.
+        matchCodeRef.current = ''
       } else if (event.type === 'cleared') {
         clearHistory(parsed).then((next) => {
+          if (roomCodeRef.current !== parsed) return
           setHistory(next)
           setHistoryCleared(true)
         })
@@ -236,6 +274,7 @@ function App() {
 
   function toggleAutoCopy(): void {
     const next = !autoCopy
+    autoCopyRef.current = next
     setAutoCopy(next)
     try { localStorage.setItem(AUTO_COPY_KEY, next ? '1' : '0') } catch { /* private mode */ }
   }
@@ -251,10 +290,15 @@ function App() {
     deviceRef.current = null
     setStatus('idle')
     setStatusMessage('')
+    setNotice('')
     setHistory([])
     setHistoryCleared(false)
+    setDeliveredIds(new Set())
     setSecure(false)
     setMatchCode('')
+    setConfirmedMatchCode('')
+    matchCodeRef.current = ''
+    confirmedMatchCodeRef.current = ''
     setPeerRoom('')
     clearSavedRoom()
     if (window.location.search || window.location.hash) window.history.replaceState({}, '', window.location.pathname)
@@ -279,22 +323,30 @@ function App() {
     const activeClient = clientRef.current
     if (!activeClient || status !== 'connected') throw new Error('Not connected yet. Keep this tab open while the room reconnects, then try again.')
     if (!secure) throw new Error('The secure channel is still getting ready — try again in a moment.')
+    if (!matchCode || confirmedMatchCode !== matchCode) throw new Error('Compare the match code on both screens and confirm it before sharing.')
     setNotice('')
+    const activeRoom = roomCodeRef.current
     const entry = createEntry(text, 'this device', image)
-    setHistory(await saveEntry(entry, roomCodeRef.current))
+    const next = await saveEntry(entry, activeRoom)
+    if (roomCodeRef.current !== activeRoom || clientRef.current !== activeClient) return
+    setHistory(next)
     setHistoryCleared(false)
     await activeClient.sendClipboardItem(entry.id, entry.createdAt, { text: entry.text, image: entry.image, kind: entry.kind })
   }
 
   async function clearAllHistory(): Promise<void> {
     const activeRoom = roomCodeRef.current
-    setHistory(await clearHistory(activeRoom))
+    const next = await clearHistory(activeRoom)
+    if (roomCodeRef.current !== activeRoom) return
+    setHistory(next)
     setHistoryCleared(true)
     await clientRef.current?.sendClearHistory()
   }
 
   async function deleteHistoryItem(id: string): Promise<void> {
-    const next = await deleteEntry(id, roomCodeRef.current)
+    const activeRoom = roomCodeRef.current
+    const next = await deleteEntry(id, activeRoom)
+    if (roomCodeRef.current !== activeRoom) return
     setHistory(next)
     if (next.length === 0) setHistoryCleared(true)
   }
@@ -304,9 +356,13 @@ function App() {
   }
 
   function workspace(): React.JSX.Element {
-    const canShare = status === 'connected' && secure
+    const matchConfirmed = secure && matchCode !== '' && confirmedMatchCode === matchCode
+    // Sharing is unlocked only after both people compared the code and this
+    // side explicitly confirmed it. A new peer produces a new code, so a
+    // silently substituted device cannot inherit the old confirmation.
+    const canShare = status === 'connected' && matchConfirmed
     const peerHere = status === 'connected'
-    return <main className="workspace-shell"><header className="workspace-header"><div><p className="eyebrow">Your room <span className="room-code-inline">{roomCode.slice(0, 4)} {roomCode.slice(4)}</span></p><h1 ref={workspaceHeadingRef} tabIndex={-1}>Clipboard, in sync.</h1></div><div className="workspace-actions"><ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />{themeButton()}<button className="secondary-button" type="button" onClick={reset}>Leave room</button></div></header><div className="workspace-grid"><div className="workspace-main"><ClipboardComposer onShare={share} canShare={canShare} notice={notice} /><ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} /></div><aside className="workspace-rail"><div className="rail-card"><span className="rail-kicker">Connected device</span><div className="device-line"><span className="device-orb" aria-hidden="true">{device === 'desktop' ? <PhoneIcon size={20} /> : <ComputerIcon size={20} />}</span><div><strong>{device === 'desktop' ? 'Phone' : 'Computer'}</strong><small>{peerHere ? (secure ? 'Secure channel ready' : 'Setting up secure channel…') : 'Not in the room right now'}</small></div><span className={peerHere ? 'online-dot' : 'online-dot is-offline'} aria-label={peerHere ? 'The other device is connected' : 'The other device is not connected'} /></div><p>Share from either device — new items appear at the top of both histories.</p></div>{matchCode ? <div className="rail-card"><span className="rail-kicker">Match check</span><div className="code-row"><strong>{matchCode}</strong></div><p>{secure ? 'Same on both screens? Then no one is in the middle.' : 'Compare this with the other screen once it connects. They should match.'}</p></div> : null}<div className="rail-note"><span aria-hidden="true"><RingIcon /></span><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></div><label className="auto-copy-toggle"><input type="checkbox" checked={autoCopy} onChange={toggleAutoCopy} /><span>Auto-copy new items to this device&rsquo;s clipboard</span></label></aside></div></main>
+    return <main className="workspace-shell"><header className="workspace-header"><div><p className="eyebrow">Your room <span className="room-code-inline">{roomCode.slice(0, 4)} {roomCode.slice(4)}</span></p><h1 ref={workspaceHeadingRef} tabIndex={-1}>Clipboard, in sync.</h1></div><div className="workspace-actions"><ConnectionStatus status={status} device={device ?? 'desktop'} onReset={reset} onRetry={retry} />{themeButton()}<button className="secondary-button" type="button" onClick={reset}>Leave room</button></div></header><div className="workspace-grid"><div className="workspace-main"><ClipboardComposer onShare={share} canShare={canShare} notice={notice} blockedMessage={secure && matchCode && !matchConfirmed ? 'Confirm the match code in the match check card to enable sharing.' : undefined} /><ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} /></div><aside className="workspace-rail"><div className="rail-card"><span className="rail-kicker">Connected device</span><div className="device-line"><span className="device-orb" aria-hidden="true">{device === 'desktop' ? <PhoneIcon size={20} /> : <ComputerIcon size={20} />}</span><div><strong>{device === 'desktop' ? 'Phone' : 'Computer'}</strong><small>{peerHere ? (secure ? (matchConfirmed ? 'Secure channel ready' : 'Verify the match code below') : 'Setting up secure channel…') : 'Not in the room right now'}</small></div><span className={peerHere ? 'online-dot' : 'online-dot is-offline'} aria-label={peerHere ? 'The other device is connected' : 'The other device is not connected'} /></div><p>Share from either device — new items appear at the top of both histories.</p></div>{matchCode ? <div className="rail-card"><span className="rail-kicker">Match check</span><div className="code-row"><strong>{matchCode}</strong></div>{secure ? (matchConfirmed ? <p className="match-confirmed"><CheckIcon size={13} /> Match confirmed — sharing enabled.</p> : <><p>Same code on the other screen? Confirm it to unlock sharing.</p><button className="secondary-button full-width match-confirm-button" type="button" onClick={() => { clientRef.current?.confirmMatch(); confirmedMatchCodeRef.current = matchCode; setConfirmedMatchCode(matchCode) }}>Codes match — enable sharing</button></>) : <p>Compare this with the other screen once it connects. They should match.</p>}</div> : null}<div className="rail-note"><span aria-hidden="true"><RingIcon /></span><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></div><label className="auto-copy-toggle"><input type="checkbox" checked={autoCopy} onChange={toggleAutoCopy} /><span>Auto-copy new items to this device&rsquo;s clipboard</span></label></aside></div></main>
   }
 
   // Desktop shows the QR pairing screen until actually connected; the phone
