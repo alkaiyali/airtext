@@ -3,6 +3,7 @@ import type { RoomStatus } from '../types'
 import { roomInviteUrl } from '../types'
 import { ConnectionStatus } from './ConnectionStatus'
 import { CheckIcon, CopyIcon } from './icons'
+import { TrustSteps } from './TrustSteps'
 
 interface HostPairingProps {
   code: string
@@ -80,6 +81,7 @@ export function HostPairing({ code, status, errorMessage = '', onRetry, onReset 
         {waiting && status !== 'waiting' ? <span className="pulse-dot" aria-hidden="true" /> : null}
         {waitCopy(status, errorMessage)}
       </p>
+      <TrustSteps compact />
       <p className="micro-copy">The room closes after 30 minutes without activity.</p>
     </section>
   )

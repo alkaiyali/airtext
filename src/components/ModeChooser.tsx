@@ -1,5 +1,6 @@
 import type { DeviceKind } from '../types'
 import { ChevronRightIcon, ComputerIcon, LockIcon, PhoneIcon } from './icons'
+import { TrustSteps } from './TrustSteps'
 
 interface ModeChooserProps {
   preferred: DeviceKind
@@ -30,6 +31,7 @@ export function ModeChooser({ preferred, onChoose }: ModeChooserProps) {
         <span>No account</span>
         <span>Nothing stored on a server</span>
       </p>
+      <TrustSteps />
     </section>
   )
 }

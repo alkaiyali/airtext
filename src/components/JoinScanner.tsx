@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { parseInvite } from '../lib/roomClient'
 import { startQrScanning, type QrScanFailure, type QrScanFailureKind, type QrScanHandle } from '../lib/qrScanner'
 import { ConnectionStatus } from './ConnectionStatus'
+import { TrustSteps } from './TrustSteps'
 import type { RoomStatus } from '../types'
 
 interface JoinScannerProps {
@@ -203,6 +204,7 @@ export function JoinScanner({ status, initialCode = '', errorMessage, onRetry, o
         )}
         {panelError ? <p className="error-message" id="room-code-error" role="alert">{panelError}</p> : null}
       </div>
+      <TrustSteps compact />
     </section>
   )
 }

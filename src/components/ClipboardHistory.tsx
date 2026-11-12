@@ -11,6 +11,8 @@ interface ClipboardHistoryProps {
   onClear: () => void
   onDelete?: (id: string) => void
   deliveredIds?: Set<string>
+  /** The just-arrived item, briefly highlighted so a toast "View" lands visibly. */
+  highlightId?: string
 }
 
 // One formatter for the whole list: constructing an Intl.DateTimeFormat per
@@ -51,7 +53,7 @@ function focusComposer(): void {
   textarea.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
 }
 
-export function ClipboardHistory({ entries, cleared = false, onClear, onDelete, deliveredIds = new Set() }: ClipboardHistoryProps) {
+export function ClipboardHistory({ entries, cleared = false, onClear, onDelete, deliveredIds = new Set(), highlightId = '' }: ClipboardHistoryProps) {
   const [copiedId, setCopiedId] = useState('')
   const [copyError, setCopyError] = useState('')
   const [expandedId, setExpandedId] = useState('')
@@ -137,7 +139,7 @@ export function ClipboardHistory({ entries, cleared = false, onClear, onDelete, 
             const delivered = local && deliveredIds.has(entry.id)
             const copied = copiedId === entry.id
             return (
-              <article className="history-item" key={entry.id}>
+              <article className={entry.id === highlightId ? 'history-item is-new' : 'history-item'} id={`history-${entry.id}`} key={entry.id} tabIndex={-1}>
                 {entry.kind === 'image' && entry.image ? <img className="history-image" src={entry.image} alt={entry.text || 'Shared image'} loading="lazy" /> : null}
                 {entry.text ? <p className={`history-text ${isLong && !isExpanded ? 'is-truncated' : ''}`}>{entry.text}</p> : null}
                 {isLong ? <button className="text-button expand-button" type="button" aria-expanded={isExpanded} onClick={() => setExpandedId(isExpanded ? '' : entry.id)}>{isExpanded ? 'Show less' : 'Show more'}</button> : null}

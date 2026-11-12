@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrivalNotice } from './components/ArrivalNotice'
 import { ClipboardComposer } from './components/ClipboardComposer'
 import { ClipboardHistory } from './components/ClipboardHistory'
 import { ConnectionStatus } from './components/ConnectionStatus'
@@ -126,6 +127,16 @@ function App() {
   const [autoCopy, setAutoCopy] = useState(() => { try { return localStorage.getItem(AUTO_COPY_KEY) === '1' } catch { return false } })
   const [deliveredIds, setDeliveredIds] = useState<Set<string>>(new Set())
   const [dark, setDark] = useState(() => { try { return localStorage.getItem(THEME_KEY) === 'dark' } catch { return false } })
+  // Arrival feedback: the just-received item behind the toast. The toast is the
+  // live region, so screen readers announce it once; vibration and the title
+  // flash cover the phone-in-pocket and background-tab cases.
+  const [lastArrival, setLastArrival] = useState<ClipboardEntry | null>(null)
+  const [arrivalCopied, setArrivalCopied] = useState(false)
+  // Shares that landed while the tab was hidden. The title names the count,
+  // never the content: tab history is shoulder-surfable.
+  const [unread, setUnread] = useState(0)
+  const [tabHidden, setTabHidden] = useState(() => (typeof document !== 'undefined' ? document.hidden : false))
+  const arrivalTimerRef = useRef<number | undefined>(undefined)
   // The room code in which the other device has actually been present. Scoped
   // to the code so a fresh join cannot inherit another room's connected state;
   // a saved room (reload) is trusted to keep its workspace during reconnect,
@@ -193,6 +204,12 @@ function App() {
     setHistory([])
     setHistoryCleared(false)
     setDeliveredIds(new Set())
+    // A new room never inherits the previous room's arrival toast or unread.
+    if (arrivalTimerRef.current !== undefined) window.clearTimeout(arrivalTimerRef.current)
+    arrivalTimerRef.current = undefined
+    setLastArrival(null)
+    setArrivalCopied(false)
+    setUnread(0)
     const nextClient = new RoomClient(parsed, nextDevice, undefined, resumeTokenFor(parsed, nextDevice))
     clientRef.current = nextClient
     nextClient.subscribe((event) => {
@@ -220,6 +237,20 @@ function App() {
           setHistory(next)
           setHistoryCleared(false)
         })
+        // The toast is the announcement: one visible + screen-reader signal per
+        // arrival, auto-dismissed so a burst does not stack. The title counts
+        // while hidden; vibration covers the phone-in-pocket case.
+        setLastArrival(entry)
+        setArrivalCopied(false)
+        if (arrivalTimerRef.current !== undefined) window.clearTimeout(arrivalTimerRef.current)
+        arrivalTimerRef.current = window.setTimeout(() => {
+          setLastArrival((current) => (current?.id === entry.id ? null : current))
+        }, 8000)
+        try {
+          const withVibrate = navigator as Navigator & { vibrate?: (pattern: number) => boolean }
+          withVibrate.vibrate?.(15)
+        } catch { /* haptics are best-effort */ }
+        if (document.hidden) setUnread((count) => count + 1)
         // Never push a received item into the OS clipboard until this user has
         // confirmed the peer's match code; otherwise an unverified peer could
         // write to the clipboard before the pairing check.
@@ -272,6 +303,21 @@ function App() {
 
   useEffect(() => () => clientRef.current?.close(), [])
 
+  // Background-tab arrivals accumulate into the title; returning clears them.
+  useEffect(() => {
+    function onVisibility(): void {
+      setTabHidden(document.hidden)
+      if (!document.hidden) setUnread(0)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
+
+  // The arrival toast auto-dismisses; clear its timer with the room.
+  useEffect(() => () => {
+    if (arrivalTimerRef.current !== undefined) window.clearTimeout(arrivalTimerRef.current)
+  }, [])
+
   function toggleAutoCopy(): void {
     const next = !autoCopy
     autoCopyRef.current = next
@@ -300,6 +346,11 @@ function App() {
     matchCodeRef.current = ''
     confirmedMatchCodeRef.current = ''
     setPeerRoom('')
+    if (arrivalTimerRef.current !== undefined) window.clearTimeout(arrivalTimerRef.current)
+    arrivalTimerRef.current = undefined
+    setLastArrival(null)
+    setArrivalCopied(false)
+    setUnread(0)
     clearSavedRoom()
     if (window.location.search || window.location.hash) window.history.replaceState({}, '', window.location.pathname)
   }
@@ -361,6 +412,32 @@ function App() {
     setConfirmedMatchCode(matchCode)
   }
 
+  function dismissArrival(): void {
+    if (arrivalTimerRef.current !== undefined) window.clearTimeout(arrivalTimerRef.current)
+    arrivalTimerRef.current = undefined
+    setLastArrival(null)
+    setArrivalCopied(false)
+  }
+
+  async function copyArrival(): Promise<void> {
+    if (!lastArrival) return
+    const result = await copyEntry(lastArrival)
+    if (result.ok) {
+      setArrivalCopied(true)
+      window.setTimeout(() => setArrivalCopied(false), 1600)
+    }
+  }
+
+  function viewArrival(): void {
+    if (!lastArrival) return
+    setUnread(0)
+    const element = document.getElementById(`history-${lastArrival.id}`)
+    if (!element) return
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    element.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+    element.focus({ preventScroll: true })
+  }
+
   function workspace(): React.JSX.Element {
     const matchConfirmed = secure && matchCode !== '' && confirmedMatchCode === matchCode
     // Sharing is unlocked only after both people compared the code and this
@@ -404,8 +481,20 @@ function App() {
           </section>
         ) : null}
         <ClipboardComposer onShare={share} canShare={canShare} notice={notice} blockedMessage={secure && matchCode && !matchConfirmed ? 'Confirm the match code above to enable sharing.' : undefined} />
-        <ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} />
+        <ClipboardHistory entries={history} cleared={historyCleared} onClear={clearAllHistory} onDelete={deleteHistoryItem} deliveredIds={deliveredIds} highlightId={lastArrival?.id ?? ''} />
         <footer className="workspace-footer"><LockIcon size={14} /><p><strong>Private by default.</strong> Each visit makes fresh encryption keys, and your history lives only in this browser. Rooms close 30 minutes after both devices leave.</p></footer>
+        {lastArrival ? (
+          <ArrivalNotice
+            entry={lastArrival}
+            peerName={peerName}
+            copied={arrivalCopied}
+            autoCopy={autoCopy}
+            onCopy={() => void copyArrival()}
+            onView={viewArrival}
+            onDismiss={dismissArrival}
+            onEnableAutoCopy={toggleAutoCopy}
+          />
+        ) : null}
       </main>
     )
   }
@@ -417,9 +506,14 @@ function App() {
   const showWorkspace = status === 'connected' || (device === 'phone' && peerRoom === roomCode && client !== null && status !== 'idle')
 
   // Tabs, history entries, and the PWA task switcher follow the room state.
+  // While hidden, the title counts unseen arrivals (never their content).
   useEffect(() => {
-    document.title = documentTitle(showWorkspace, device, status)
-  }, [showWorkspace, device, status])
+    if (tabHidden && unread > 0 && showWorkspace) {
+      document.title = unread === 1 ? 'New share · airtext' : `${unread} new shares · airtext`
+    } else {
+      document.title = documentTitle(showWorkspace, device, status)
+    }
+  }, [showWorkspace, device, status, unread, tabHidden])
 
   // Arriving in the workspace is a view change: focus its heading so screen
   // readers announce the new screen instead of silently dropping to <body>.

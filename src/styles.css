@@ -310,11 +310,38 @@ code { font-family: var(--font-mono); }
 .workspace-footer svg { flex-shrink: 0; margin-top: 2px; color: var(--green-ink); }
 .workspace-footer strong { color: var(--muted); font-weight: 600; }
 
+/* Trust preview: the match check, explained before pairing instead of asserted. */
+.trust-steps { width: 100%; margin-top: 20px; padding: 16px 18px; text-align: start; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.trust-steps h2 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+.trust-steps h2 svg { flex-shrink: 0; color: var(--green-ink); }
+.trust-steps ol { display: grid; gap: 10px; margin: 12px 0 0; padding: 0; list-style: none; }
+.trust-steps li { display: flex; align-items: flex-start; gap: 10px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.trust-steps li strong { color: var(--ink); font-weight: 600; }
+.step-num { display: grid; flex-shrink: 0; place-items: center; width: 22px; height: 22px; margin-top: 1px; font-size: 12px; font-weight: 700; color: var(--accent-ink); background: var(--accent-tint); border-radius: 50%; }
+.trust-compact { margin-top: 16px; }
+
+/* Arrival toast: the "it worked" moment. Fixed so it is seen mid-scroll; the
+   toast itself is the live region, so screen readers announce it exactly once.
+   Ink-on-canvas in both themes for contrast; content never reaches the title. */
+.arrival-toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 60; display: flex; align-items: center; gap: 12px; width: min(560px, calc(100% - 32px)); padding: 12px 12px 12px 16px; color: var(--canvas); background: var(--ink); border-radius: 16px; box-shadow: 0 12px 32px -8px rgba(0, 0, 0, .35); transform: translateX(-50%); }
+.arrival-text { flex: 1 1 auto; min-width: 0; }
+.arrival-text strong { display: block; font-size: 13px; font-weight: 650; }
+.arrival-snippet { display: block; margin-top: 2px; overflow: hidden; font-size: 14px; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; opacity: .85; }
+.arrival-actions { display: flex; flex-shrink: 0; align-items: center; gap: 4px; }
+.toast-copy { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px; font-size: 13.5px; font-weight: 650; color: var(--ink); background: var(--canvas); border: 0; border-radius: 999px; }
+.toast-ghost { display: inline-flex; align-items: center; min-height: 36px; padding: 0 10px; font-size: 13px; font-weight: 600; color: inherit; background: transparent; border: 0; border-radius: 8px; opacity: .85; text-decoration: underline; text-underline-offset: 3px; }
+.toast-ghost:hover { opacity: 1; }
+/* The just-arrived row keeps a wash until the next arrival, so View lands visibly. */
+.history-item.is-new { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.history-item:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+
 /* A newly arrived item lands with one soft rise; the list never re-animates. */
 @media (prefers-reduced-motion: no-preference) {
   .history-item { animation: land .3s cubic-bezier(.2, .8, .2, 1) both; }
+  .arrival-toast { animation: toast-in .25s cubic-bezier(.2, .8, .2, 1) both; }
 }
 @keyframes land { from { opacity: 0; transform: translateY(6px); } }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 @keyframes breathe { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
@@ -333,6 +360,8 @@ code { font-family: var(--font-mono); }
   .heading-actions { flex: 1 1 100%; }
   .history-search { flex: 1; width: auto; }
   .topbar-actions .secondary-button { padding: 0 12px; }
+  .arrival-toast { flex-wrap: wrap; }
+  .arrival-actions { flex-wrap: wrap; width: 100%; justify-content: flex-end; }
 }
 
 @supports (padding: env(safe-area-inset-bottom)) {
@@ -347,4 +376,5 @@ code { font-family: var(--font-mono); }
   .history-search { height: 44px; }
   .topbar-actions .secondary-button, .connection-status .text-button { min-height: 44px; }
   .switch { min-height: 44px; }
+  .toast-copy, .toast-ghost { min-height: 44px; }
 }
